@@ -1,0 +1,48 @@
+version: '3.8'
+
+services:
+  woolly-chain:
+    build: .
+    container_name: woolly-node
+    restart: unless-stopped
+    expose:
+      - "3000"
+    volumes:
+      - woolly-data:/app/data
+    environment:
+      - NODE_ENV=production
+      - WOOLLY_PORT=3000
+      - WOOLLY_DATA_DIR=/app/data
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  web:
+    image: nginx:alpine
+    container_name: woolly-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./website/index.html:/usr/share/nginx/html/index.html:ro
+      - ./website/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      woolly-chain:
+        condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
+        max-file: "3"
+
+volumes:
+  woolly-data:
+    driver: local

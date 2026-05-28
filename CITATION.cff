@@ -1,0 +1,39 @@
+cff-version: 1.2.0
+title: "Woolly Protocol Simulation Engine"
+message: "If you use this software, please cite both the manuscript and the software."
+type: software
+authors:
+  - given-names: Nithun
+    family-names: ""
+    affiliation: "Woolly Farms, Bengaluru, India"
+    email: nithun@realexi.com
+version: "0.1-development"
+date-released: "2026-05-22"
+license: Apache-2.0
+repository-code: "https://github.com/Hunger-Free-Protocol/woolly-chain"
+keywords:
+  - blockchain
+  - precision-agriculture
+  - controlled-environment-agriculture
+  - hydroponics
+  - multi-agent-systems
+  - proof-of-nourishment
+  - dMRV
+  - carbon-credits
+  - food-systems
+abstract: >-
+  Reference simulation engine for the Woolly Protocol — a sovereign-chain
+  blockchain architecture for sustainable food systems with novel Proof-of-Nourishment
+  consensus, multi-agent on-chain auditability, avoided-emissions life-cycle dMRV,
+  seed-to-fork chain of custody, and an effort-based food mining economic model.
+  Reproduces all manuscript tables for the COMPAG 2026 submission.
+preferred-citation:
+  type: article
+  title: "Woolly Protocol: A Proof-of-Nourishment Blockchain Architecture for Autonomous, Verifiable, Affordable, and Sustainable Food Systems"
+  authors:
+    - given-names: Nithun
+      family-names: ""
+      affiliation: "Woolly Farms, Bengaluru, India"
+  journal: "Computers and Electronics in Agriculture"
+  year: 2026
+  status: in-review

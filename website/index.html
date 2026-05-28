@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Woolly Protocol — Sovereign Proof-of-Nourishment Blockchain</title>
+  <meta name="description" content="Woolly Protocol unifies DePIN infrastructure, autonomous AI agents, and a sovereign blockchain to make food verifiable, affordable, and eventually free for everyone who contributes.">
+  <meta property="og:title" content="Woolly Protocol">
+  <meta property="og:description" content="A sovereign blockchain where growing food IS the consensus mechanism.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://woolly.earth">
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌱</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --earth-900: #1a1208;
+      --earth-800: #2d2010;
+      --earth-700: #3d2e18;
+      --earth-600: #5c4a2a;
+      --earth-500: #7a6340;
+      --earth-400: #a08860;
+      --earth-300: #c4aa7a;
+      --earth-200: #e0d0b0;
+      --earth-100: #f0e8d8;
+      --earth-50:  #faf6ee;
+      --green-900: #0a2412;
+      --green-700: #1a5c30;
+      --green-600: #228B22;
+      --green-500: #2ea043;
+      --green-400: #4aba60;
+      --green-300: #7dd390;
+      --green-200: #b8e8c0;
+      --green-100: #e0f5e4;
+      --warm-white: #fdfaf5;
+      --text-primary: #1a1208;
+      --text-secondary: #5c4a2a;
+      --text-muted: #7a6340;
+      --serif: 'DM Serif Display', Georgia, serif;
+      --sans: 'Inter', -apple-system, sans-serif;
+    }
+
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    html { scroll-behavior: smooth; }
+
+    body {
+      font-family: var(--sans);
+      color: var(--text-primary);
+      background: var(--warm-white);
+      line-height: 1.6;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* ── Nav ─────────────────────────────────── */
+    nav {
+      position: fixed;
+      top: 0;
+      width: 100%;
+      z-index: 100;
+      padding: 1rem 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      transition: background 0.3s, box-shadow 0.3s;
+    }
+    nav.scrolled {
+      background: rgba(253,250,245,0.95);
+      backdrop-filter: blur(10px);
+      box-shadow: 0 1px 0 rgba(26,18,8,0.08);
+    }
+    .nav-logo {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      font-family: var(--serif);
+      font-size: 1.4rem;
+      color: var(--text-primary);
+      text-decoration: none;
+    }
+    .nav-logo svg { width: 32px; height: 32px; }
+    .nav-links { display: flex; gap: 2rem; align-items: center; }
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 0.9rem;
+      font-weight: 500;
+      transition: color 0.2s;
+    }
+    .nav-links a:hover { color: var(--green-600); }
+
+    /* ── Hero ─────────────────────────────────── */
+    .hero {
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      text-align: center;
+      padding: 6rem 2rem 4rem;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: '';
+      position: absolute;
+      top: -30%;
+      right: -20%;
+      width: 70vw;
+      height: 70vw;
+      background: radial-gradient(circle, rgba(46,160,67,0.06) 0%, transparent 70%);
+      border-radius: 50%;
+      pointer-events: none;
+    }
+    .hero::after {
+      content: '';
+      position: absolute;
+      bottom: -20%;
+      left: -15%;
+      width: 50vw;
+      height: 50vw;
+      background: radial-gradient(circle, rgba(160,136,96,0.06) 0%, transparent 70%);
+      border-radius: 50%;
+      pointer-events: none;
+    }
+    .hero-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.4rem 1rem;
+      background: var(--green-100);
+      color: var(--green-700);
+      border-radius: 100px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      letter-spacing: 0.03em;
+      margin-bottom: 2rem;
+    }
+    .hero-badge::before {
+      content: '';
+      width: 6px;
+      height: 6px;
+      background: var(--green-500);
+      border-radius: 50%;
+      animation: pulse 2s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.4; }
+    }
+    .hero h1 {
+      font-family: var(--serif);
+      font-size: clamp(2.5rem, 6vw, 4.5rem);
+      line-height: 1.1;
+      max-width: 800px;
+      margin-bottom: 1.5rem;
+      position: relative;
+    }
+    .hero h1 .highlight {
+      color: var(--green-600);
+    }
+    .hero p {
+      font-size: clamp(1rem, 2vw, 1.25rem);
+      color: var(--text-secondary);
+      max-width: 600px;
+      margin-bottom: 2.5rem;
+      line-height: 1.7;
+    }
+    .hero-ctas {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+      justify-content: center;
+    }
+    .btn-primary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.85rem 2rem;
+      background: var(--green-600);
+      color: white;
+      border: none;
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: background 0.2s, transform 0.1s;
+    }
+    .btn-primary:hover { background: var(--green-700); transform: translateY(-1px); }
+    .btn-secondary {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.85rem 2rem;
+      background: transparent;
+      color: var(--text-primary);
+      border: 1.5px solid var(--earth-300);
+      border-radius: 8px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      text-decoration: none;
+      transition: border-color 0.2s, transform 0.1s;
+    }
+    .btn-secondary:hover { border-color: var(--earth-500); transform: translateY(-1px); }
+
+    /* ── Section shared ──────────────────────── */
+    section {
+      padding: 6rem 2rem;
+    }
+    .container {
+      max-width: 1100px;
+      margin: 0 auto;
+    }
+    .section-label {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--green-600);
+      margin-bottom: 0.75rem;
+    }
+    .section-title {
+      font-family: var(--serif);
+      font-size: clamp(1.8rem, 4vw, 2.8rem);
+      line-height: 1.2;
+      margin-bottom: 1rem;
+    }
+    .section-desc {
+      font-size: 1.05rem;
+      color: var(--text-secondary);
+      max-width: 600px;
+      line-height: 1.7;
+    }
+
+    /* ── Core Idea ────────────────────────────── */
+    .core-idea {
+      background: var(--earth-50);
+      border-top: 1px solid rgba(26,18,8,0.06);
+      border-bottom: 1px solid rgba(26,18,8,0.06);
+    }
+    .core-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4rem;
+      align-items: center;
+      margin-top: 3rem;
+    }
+    .core-visual {
+      background: var(--earth-800);
+      border-radius: 16px;
+      padding: 2.5rem;
+      color: var(--earth-100);
+      position: relative;
+      overflow: hidden;
+    }
+    .core-visual::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      right: 0;
+      width: 120px;
+      height: 120px;
+      background: radial-gradient(circle, rgba(46,160,67,0.15) 0%, transparent 70%);
+      border-radius: 50%;
+    }
+    .consensus-formula {
+      font-family: 'Courier New', monospace;
+      font-size: 0.95rem;
+      margin-bottom: 1.5rem;
+      opacity: 0.7;
+      letter-spacing: 0.02em;
+    }
+    .consensus-title {
+      font-family: var(--serif);
+      font-size: 1.5rem;
+      margin-bottom: 1.5rem;
+      color: var(--green-300);
+    }
+    .pillar {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+      padding: 0.75rem 0;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+    .pillar-weight {
+      font-size: 1.4rem;
+      font-weight: 700;
+      color: var(--green-400);
+      min-width: 50px;
+    }
+    .pillar-name { font-weight: 600; font-size: 0.95rem; }
+    .pillar-desc { font-size: 0.8rem; opacity: 0.6; margin-top: 0.15rem; }
+    .core-text h3 {
+      font-family: var(--serif);
+      font-size: 1.3rem;
+      margin-bottom: 0.75rem;
+      margin-top: 1.5rem;
+    }
+    .core-text h3:first-of-type { margin-top: 0; }
+    .core-text p {
+      color: var(--text-secondary);
+      font-size: 0.95rem;
+      line-height: 1.7;
+    }
+
+    /* ── How It Works ────────────────────────── */
+    .layers {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      margin-top: 3rem;
+    }
+    .layer-card {
+      background: white;
+      border: 1px solid rgba(26,18,8,0.08);
+      border-radius: 12px;
+      padding: 2rem;
+      transition: transform 0.2s, box-shadow 0.2s;
+    }
+    .layer-card:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 8px 30px rgba(26,18,8,0.06);
+    }
+    .layer-icon {
+      width: 48px;
+      height: 48px;
+      border-radius: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.5rem;
+      margin-bottom: 1.25rem;
+    }
+    .layer-card:nth-child(1) .layer-icon { background: #e8f5e9; }
+    .layer-card:nth-child(2) .layer-icon { background: #e3f2fd; }
+    .layer-card:nth-child(3) .layer-icon { background: #fff3e0; }
+    .layer-card:nth-child(4) .layer-icon { background: #f3e5f5; }
+    .layer-card:nth-child(5) .layer-icon { background: #e0f2f1; }
+    .layer-card:nth-child(6) .layer-icon { background: #fce4ec; }
+    .layer-card h3 {
+      font-family: var(--serif);
+      font-size: 1.15rem;
+      margin-bottom: 0.5rem;
+    }
+    .layer-card p {
+      font-size: 0.9rem;
+      color: var(--text-muted);
+      line-height: 1.6;
+    }
+
+    /* ── Free Food ────────────────────────────── */
+    .free-food {
+      background: var(--green-900);
+      color: var(--green-100);
+    }
+    .free-food .section-label { color: var(--green-400); }
+    .free-food .section-title { color: white; }
+    .free-food .section-desc { color: var(--green-200); }
+    .paths-grid {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 1.5rem;
+      margin-top: 3rem;
+    }
+    .path-card {
+      background: rgba(255,255,255,0.05);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 2rem;
+      transition: background 0.2s;
+    }
+    .path-card:hover { background: rgba(255,255,255,0.08); }
+    .path-number {
+      font-size: 0.75rem;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      color: var(--green-400);
+      margin-bottom: 0.75rem;
+    }
+    .path-card h3 {
+      font-family: var(--serif);
+      font-size: 1.3rem;
+      color: white;
+      margin-bottom: 0.75rem;
+    }
+    .path-card p {
+      font-size: 0.9rem;
+      color: var(--green-200);
+      line-height: 1.6;
+      margin-bottom: 1rem;
+    }
+    .path-detail {
+      font-size: 0.8rem;
+      color: var(--green-300);
+      padding: 0.6rem 0.8rem;
+      background: rgba(255,255,255,0.05);
+      border-radius: 6px;
+    }
+
+    /* ── Stats ────────────────────────────────── */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 2rem;
+      margin-top: 3rem;
+    }
+    .stat {
+      text-align: center;
+    }
+    .stat-number {
+      font-family: var(--serif);
+      font-size: 2.5rem;
+      color: var(--green-600);
+      line-height: 1;
+      margin-bottom: 0.5rem;
+    }
+    .stat-label {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+    }
+
+    /* ── Personas ─────────────────────────────── */
+    .personas {
+      background: var(--earth-50);
+      border-top: 1px solid rgba(26,18,8,0.06);
+      border-bottom: 1px solid rgba(26,18,8,0.06);
+    }
+    .persona-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 1fr);
+      gap: 1.25rem;
+      margin-top: 3rem;
+    }
+    .persona-card {
+      text-align: center;
+      padding: 1.5rem 1rem;
+      background: white;
+      border-radius: 12px;
+      border: 1px solid rgba(26,18,8,0.06);
+    }
+    .persona-emoji {
+      font-size: 2rem;
+      margin-bottom: 0.75rem;
+    }
+    .persona-card h4 {
+      font-family: var(--serif);
+      font-size: 1rem;
+      margin-bottom: 0.25rem;
+    }
+    .persona-card .share {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--green-600);
+      margin-bottom: 0.25rem;
+    }
+    .persona-card p {
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      line-height: 1.5;
+    }
+
+    /* ── Operational Heritage ─────────────────── */
+    .heritage-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 3rem;
+      margin-top: 3rem;
+      align-items: start;
+    }
+    .heritage-text p {
+      color: var(--text-secondary);
+      line-height: 1.7;
+      margin-bottom: 1rem;
+    }
+    .heritage-stats {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+    }
+    .heritage-stat {
+      background: white;
+      border: 1px solid rgba(26,18,8,0.08);
+      border-radius: 10px;
+      padding: 1.25rem;
+    }
+    .heritage-stat .number {
+      font-family: var(--serif);
+      font-size: 1.5rem;
+      color: var(--green-600);
+    }
+    .heritage-stat .label {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 0.2rem;
+    }
+
+    /* ── CTA ──────────────────────────────────── */
+    .cta-section {
+      text-align: center;
+      padding: 8rem 2rem;
+    }
+    .cta-section .section-title {
+      max-width: 600px;
+      margin: 0 auto 1rem;
+    }
+    .cta-section .section-desc {
+      margin: 0 auto 2.5rem;
+    }
+
+    /* ── Footer ───────────────────────────────── */
+    footer {
+      background: var(--earth-800);
+      color: var(--earth-300);
+      padding: 3rem 2rem;
+    }
+    .footer-inner {
+      max-width: 1100px;
+      margin: 0 auto;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .footer-logo {
+      font-family: var(--serif);
+      font-size: 1.2rem;
+      color: var(--earth-100);
+    }
+    .footer-links { display: flex; gap: 2rem; }
+    .footer-links a {
+      color: var(--earth-400);
+      text-decoration: none;
+      font-size: 0.85rem;
+      transition: color 0.2s;
+    }
+    .footer-links a:hover { color: var(--earth-100); }
+    .footer-copy {
+      font-size: 0.8rem;
+      color: var(--earth-500);
+    }
+
+    /* ── Responsive ───────────────────────────── */
+    @media (max-width: 900px) {
+      .core-grid { grid-template-columns: 1fr; }
+      .layers { grid-template-columns: 1fr 1fr; }
+      .paths-grid { grid-template-columns: 1fr; }
+      .stats-row { grid-template-columns: 1fr 1fr; }
+      .persona-grid { grid-template-columns: repeat(3, 1fr); }
+      .heritage-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 600px) {
+      .layers { grid-template-columns: 1fr; }
+      .stats-row { grid-template-columns: 1fr 1fr; }
+      .persona-grid { grid-template-columns: 1fr 1fr; }
+      .nav-links { display: none; }
+      .footer-inner { flex-direction: column; gap: 1.5rem; text-align: center; }
+    }
+
+    /* ── Animations ───────────────────────────── */
+    .fade-up {
+      opacity: 0;
+      transform: translateY(30px);
+      transition: opacity 0.6s ease, transform 0.6s ease;
+    }
+    .fade-up.visible {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Nav -->
+  <nav id="nav">
+    <a href="#" class="nav-logo">
+      <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+        <circle cx="16" cy="16" r="15" fill="#228B22" opacity="0.1" stroke="#228B22" stroke-width="1.5"/>
+        <path d="M16 6 C16 6 10 14 10 20 C10 23.3 12.7 26 16 26 C19.3 26 22 23.3 22 20 C22 14 16 6 16 6Z" fill="#228B22" opacity="0.8"/>
+        <path d="M16 12 L16 22 M13 17 L16 14 M19 19 L16 16" stroke="white" stroke-width="1.2" stroke-linecap="round"/>
+      </svg>
+      Woolly
+    </a>
+    <div class="nav-links">
+      <a href="#how-it-works">How It Works</a>
+      <a href="#free-food">Free Food</a>
+      <a href="#personas">Personas</a>
+      <a href="#heritage">Heritage</a>
+      <a href="https://github.com/woolly-protocol" target="_blank">GitHub</a>
+    </div>
+  </nav>
+
+  <!-- Hero -->
+  <section class="hero">
+    <div class="hero-badge">PROOF OF NOURISHMENT</div>
+    <h1>Growing Food <span class="highlight">Is</span> the Consensus Mechanism</h1>
+    <p>Woolly Protocol is a sovereign blockchain where every farm is a validator node, every harvest strengthens the chain, and food becomes free for everyone who contributes.</p>
+    <div class="hero-ctas">
+      <a href="#free-food" class="btn-primary">How Free Food Works &darr;</a>
+      <a href="#how-it-works" class="btn-secondary">Read the Architecture</a>
+    </div>
+  </section>
+
+  <!-- Core Idea -->
+  <section class="core-idea" id="core-idea">
+    <div class="container">
+      <div class="section-label">The Core Idea</div>
+      <div class="section-title">A Blockchain That Feeds People</div>
+      <div class="section-desc">Unlike Proof of Work (which wastes energy) or Proof of Stake (which locks up capital), Proof of Nourishment derives chain security from the verified productive activity of growing food.</div>
+
+      <div class="core-grid fade-up">
+        <div class="core-visual">
+          <div class="consensus-formula">// Proof of Nourishment consensus weight</div>
+          <div class="consensus-title">W<sub>i</sub> = 0.25P + 0.40S + 0.35C</div>
+          <div class="pillar">
+            <div class="pillar-weight">25%</div>
+            <div>
+              <div class="pillar-name">Productivity</div>
+              <div class="pillar-desc">Crop cycles, yield efficiency, water usage, disease control</div>
+            </div>
+          </div>
+          <div class="pillar">
+            <div class="pillar-weight">40%</div>
+            <div>
+              <div class="pillar-name">Sustainability</div>
+              <div class="pillar-desc">Water efficiency, carbon sequestration, organic practices, surplus allocation</div>
+            </div>
+          </div>
+          <div class="pillar">
+            <div class="pillar-weight">35%</div>
+            <div>
+              <div class="pillar-name">Commitment</div>
+              <div class="pillar-desc">Time invested, capital deployed, sensor uptime, neighbor validation</div>
+            </div>
+          </div>
+        </div>
+        <div class="core-text">
+          <h3>Sustainability is the primary consensus driver</h3>
+          <p>The more sustainably you farm, the more influence you have over the chain. This is the first blockchain where doing good for the planet directly increases your consensus power.</p>
+          <h3>Zero transaction fees</h3>
+          <p>Farming IS the work. No gas fees, ever. Network costs are funded by a 5% produce settlement fee and 1% carbon credit issuance fee &mdash; built into the economy, not taxing every action.</p>
+          <h3>Four layers of Sybil resistance</h3>
+          <p>Physical sensors with centimeter GPS accuracy. Real land and capital that's expensive to fake. Multi-cycle track records taking 6&ndash;12 months to build. And cryptographic cross-validation from three or more neighboring farms.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- How It Works -->
+  <section id="how-it-works">
+    <div class="container">
+      <div class="section-label">Architecture</div>
+      <div class="section-title">Six Layers, One Chain</div>
+      <div class="section-desc">From soil sensors to governance, every layer is purpose-built for food.</div>
+
+      <div class="layers fade-up">
+        <div class="layer-card">
+          <div class="layer-icon">&#x1f4e1;</div>
+          <h3>DePIN Farm Nodes</h3>
+          <p>$150 edge-compute nodes with soil sensors, cameras, and LoRaWAN radio. Solar-powered. Centimeter-accurate GEODNET positioning. Every farm is a validator.</p>
+        </div>
+        <div class="layer-card">
+          <div class="layer-icon">&#x1f441;</div>
+          <h3>VLM Perception</h3>
+          <p>On-device vision-language models for real-time plant health, disease detection, and growth staging. Cloud fallback for complex diagnosis. All inference cryptographically signed.</p>
+        </div>
+        <div class="layer-card">
+          <div class="layer-icon">&#x1f916;</div>
+          <h3>Autonomous Agents</h3>
+          <p>One AI agent per farm with 14 tools: irrigate, harvest, negotiate prices, submit carbon measurements. Agents coordinate via A2A messaging for market timing and resource pooling.</p>
+        </div>
+        <div class="layer-card">
+          <div class="layer-icon">&#x26d3;</div>
+          <h3>Woolly Chain</h3>
+          <p>Sovereign blockchain with Proof of Nourishment consensus. 6-second blocks, 12-second finality. Five native token types. Zero gas fees. WebAuthn passkey wallets.</p>
+        </div>
+        <div class="layer-card">
+          <div class="layer-icon">&#x1f331;</div>
+          <h3>Carbon Credits</h3>
+          <p>Real-time dMRV with soil sensors, satellite NDVI, and zkML proofs. Credits command 2&ndash;3x premium due to verifiable provenance. 95% revenue goes to farmers.</p>
+        </div>
+        <div class="layer-card">
+          <div class="layer-icon">&#x1f3db;</div>
+          <h3>Governance</h3>
+          <p>Progressive decentralization from foundation multisig to token-weighted governance. Consumer-facing Produce-as-a-Service with QR-scannable provenance on every item.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Stats -->
+  <section style="background: var(--earth-50); border-top: 1px solid rgba(26,18,8,0.06); border-bottom: 1px solid rgba(26,18,8,0.06);">
+    <div class="container">
+      <div class="stats-row fade-up">
+        <div class="stat">
+          <div class="stat-number">$150</div>
+          <div class="stat-label">Per farm node<br>(95% cheaper than legacy)</div>
+        </div>
+        <div class="stat">
+          <div class="stat-number">6s</div>
+          <div class="stat-label">Block time<br>(12s practical finality)</div>
+        </div>
+        <div class="stat">
+          <div class="stat-number">$0</div>
+          <div class="stat-label">Transaction fees<br>(farming is the work)</div>
+        </div>
+        <div class="stat">
+          <div class="stat-number">5</div>
+          <div class="stat-label">Native token types<br>(governance to carbon)</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Free Food -->
+  <section class="free-food" id="free-food">
+    <div class="container">
+      <div class="section-label">The Endgame</div>
+      <div class="section-title">Three Paths to Free Food</div>
+      <div class="section-desc">Free food is not charity. It is a contribution-based economic model. Everyone contributes something &mdash; capital, land, or labor &mdash; and receives food in return.</div>
+
+      <div class="paths-grid fade-up">
+        <div class="path-card">
+          <div class="path-number">PATH 01</div>
+          <h3>Invest Capital</h3>
+          <p>Invest above the minimum threshold and receive a lifetime food subscription plus revenue from farm operations. The more you invest, the higher your tier.</p>
+          <div class="path-detail">Min $5,000 &rarr; 50 kg/month for life + revenue share</div>
+        </div>
+        <div class="path-card">
+          <div class="path-number">PATH 02</div>
+          <h3>Contribute Land</h3>
+          <p>Dedicate agricultural land to the protocol. You receive food proportional to your land area plus 25% of all revenue the farm generates.</p>
+          <div class="path-detail">Min 500 sq ft &rarr; proportional food + 25% revenue</div>
+        </div>
+        <div class="path-card">
+          <div class="path-number">PATH 03</div>
+          <h3>Work the Farm</h3>
+          <p>Contribute your labor. A portion of your wages converts to farm equity over time. After the minimum commitment period, your food subscription becomes free.</p>
+          <div class="path-detail">Min 6 months &rarr; wages + equity &rarr; free food for life</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Personas -->
+  <section class="personas" id="personas">
+    <div class="container">
+      <div class="section-label">Stakeholder Model</div>
+      <div class="section-title">Five Personas, One Ecosystem</div>
+      <div class="section-desc">Validated across 200+ crop cycles during six years of operational research at Woolly Farms (2016&ndash;2022).</div>
+
+      <div class="persona-grid fade-up">
+        <div class="persona-card">
+          <div class="persona-emoji">&#x1f3e0;</div>
+          <h4>Space Owner</h4>
+          <div class="share">25%</div>
+          <p>Provides land. Earns equity + food allocation proportional to area contributed.</p>
+        </div>
+        <div class="persona-card">
+          <div class="persona-emoji">&#x1f4b0;</div>
+          <h4>Contributor</h4>
+          <div class="share">20%</div>
+          <p>Provides capital. Build contract manages depreciation and milestone vesting.</p>
+        </div>
+        <div class="persona-card">
+          <div class="persona-emoji">&#x1f9d1;&#x200d;&#x1f33e;</div>
+          <h4>Grower</h4>
+          <div class="share">30%</div>
+          <p>Operates the farm daily with AI agent assistance. Largest revenue share.</p>
+        </div>
+        <div class="persona-card">
+          <div class="persona-emoji">&#x1f6d2;</div>
+          <h4>Patron</h4>
+          <div class="share">Produce</div>
+          <p>Consumer subscriber. Redeems Crop-Cycle Yield tokens for fresh produce.</p>
+        </div>
+        <div class="persona-card">
+          <div class="persona-emoji">&#x1f30d;</div>
+          <h4>Foundation</h4>
+          <div class="share">25%</div>
+          <p>Governance DAO. Manages free food distribution and protocol evolution.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Heritage -->
+  <section id="heritage">
+    <div class="container">
+      <div class="section-label">Operational Heritage</div>
+      <div class="section-title">Built on Six Years of Real Farming</div>
+      <div class="section-desc">Woolly Protocol didn't start in a whitepaper. It started in 80,000 sq ft of hydroponic farms across Indian agroecological zones.</div>
+
+      <div class="heritage-grid fade-up">
+        <div class="heritage-text">
+          <p>From 2016 to 2022, Woolly Farms operated controlled environment agriculture (CEA) facilities, testing the five-persona stakeholder model across 200+ crop cycles. The Woolly Brain &mdash; an 11-microservice farm management system &mdash; directly informed the design of today's autonomous agent architecture.</p>
+          <p>Post-harvest losses were reduced from 14.2% to 4.8% through logistics coordination. Insurance partners confirmed that telemetry fused with satellite data meets the threshold for parametric insurance products. Every design decision in the protocol traces back to something learned on the ground.</p>
+        </div>
+        <div class="heritage-stats">
+          <div class="heritage-stat">
+            <div class="number">80,000</div>
+            <div class="label">Sq ft CEA facilities</div>
+          </div>
+          <div class="heritage-stat">
+            <div class="number">200+</div>
+            <div class="label">Crop cycles completed</div>
+          </div>
+          <div class="heritage-stat">
+            <div class="number">4.8%</div>
+            <div class="label">Post-harvest loss (from 14.2%)</div>
+          </div>
+          <div class="heritage-stat">
+            <div class="number">6 yrs</div>
+            <div class="label">Operational research</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- CTA -->
+  <section class="cta-section">
+    <div class="container">
+      <div class="section-label">Join the Protocol</div>
+      <div class="section-title">The food system is a latent blockchain. Let's activate it.</div>
+      <div class="section-desc">Whether you have capital, land, labor, or just curiosity &mdash; there's a place for you in Woolly.</div>
+      <div class="hero-ctas" style="margin-top: 2rem;">
+        <a href="mailto:hello@woolly.earth" class="btn-primary">Get in Touch</a>
+        <a href="https://github.com/woolly-protocol" target="_blank" class="btn-secondary">View on GitHub</a>
+      </div>
+    </div>
+  </section>
+
+  <!-- Footer -->
+  <footer>
+    <div class="footer-inner">
+      <div class="footer-logo">Woolly Protocol</div>
+      <div class="footer-links">
+        <a href="#how-it-works">Architecture</a>
+        <a href="#free-food">Free Food</a>
+        <a href="#personas">Personas</a>
+        <a href="https://github.com/woolly-protocol" target="_blank">GitHub</a>
+      </div>
+      <div class="footer-copy">&copy; 2026 Woolly Protocol. Growing food. Securing chains.</div>
+    </div>
+  </footer>
+
+  <script>
+    // Nav scroll effect
+    const nav = document.getElementById('nav');
+    window.addEventListener('scroll', () => {
+      nav.classList.toggle('scrolled', window.scrollY > 50);
+    });
+
+    // Fade-up on scroll
+    const observer = new IntersectionObserver((entries) => {
+      entries.forEach(entry => {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+        }
+      });
+    }, { threshold: 0.15 });
+
+    document.querySelectorAll('.fade-up').forEach(el => observer.observe(el));
+  </script>
+</body>
+</html>
