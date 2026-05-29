@@ -69,6 +69,29 @@ export interface TokenInfo {
 }
 
 /**
+ * Telemetry bounds — single source of truth per CLAUDE.md §3 / L002.
+ *
+ * Used by:
+ *   - farm-node/src/sensors.ts clampReading() — pins out-of-range readings to nearest bound
+ *   - woolly-chain/src/api/routes.ts /validator/telemetry handler — rejects unclamped out-of-range
+ *
+ * Per architecture review docs/architecture-reviews/farm-node-clamp-flag.md §4.1.
+ */
+export const TELEMETRY_BOUNDS = {
+  soilMoisture: [0, 1] as [number, number],
+  soilPH: [3.0, 10.0] as [number, number],
+  soilEC: [0, 5] as [number, number],
+  airTemp: [-10, 60] as [number, number],
+  humidity: [0, 100] as [number, number],
+  lightIntensity: [0, 100000] as [number, number],
+  waterUsageLiters: [0, 1000] as [number, number],
+  co2Level: [0, 5000] as [number, number],
+  ndviScore: [0, 1] as [number, number],
+} as const;
+
+export type TelemetryBoundedField = keyof typeof TELEMETRY_BOUNDS;
+
+/**
  * Telemetry Data - Farm sensor readings
  */
 export interface TelemetryData {
@@ -84,6 +107,14 @@ export interface TelemetryData {
   co2Level: number;
   ndviScore: number;
   crossValidationScores: number[];
+
+  /**
+   * Per-batch counts of fields that were clamped before signing.
+   * Optional for back-compat with v0.1 telemetry on chain.
+   * Absent or {} = no clamping occurred.
+   * Per architecture review §4.4.
+   */
+  clampedFieldCounts?: Partial<Record<TelemetryBoundedField, number>>;
 }
 
 /**

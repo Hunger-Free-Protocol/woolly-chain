@@ -1,13 +1,46 @@
 /**
  * Woolly Chain - Proof of Nourishment Score Calculator
- * Calculates validator scores based on productivity, sustainability, and commitment
+ * Calculates validator scores based on productivity, sustainability, and commitment.
+ *
+ * CLAMP-AND-FLAG SEMANTICS (architecture review docs/architecture-reviews/farm-node-clamp-flag.md §5):
+ *   Per-batch `clampedFieldCounts` (on each TelemetryData entry) indicates which sensor
+ *   fields were clamped to their TELEMETRY_BOUNDS limits before signing. PoN applies
+ *   per-subscore weighting (Option B refined): subscores that depend on a clamped field
+ *   are multiplied by THETA_CLAMP_WEIGHT.
+ *
+ *   The variance-based disease subscore additionally requires the §5.4 fix: variance is
+ *   computed over the UNCLAMPED subset only (otherwise clamping a stuck sensor at the
+ *   bound collapses variance to zero and reads as "perfect stability" — perverse).
  */
 
-import { ValidatorInfo, TelemetryData, ChainConfig, DEFAULT_CHAIN_CONFIG } from '../core/types';
+import { ValidatorInfo, TelemetryData, ChainConfig, DEFAULT_CHAIN_CONFIG, TelemetryBoundedField } from '../core/types';
+
+/**
+ * Calibration parameter — weight applied to subscores whose underlying field
+ * was clamped in any batch of the recent window. Locked 2026-05-29 per
+ * architecture review §5.5. Add to Doc 3 §12 sensitivity list.
+ */
+export const THETA_CLAMP_WEIGHT = 0.5;
+
+/** True if any batch in the window has the given field in its clampedFieldCounts (count > 0). */
+function anyClampedInWindow(window: TelemetryData[], field: TelemetryBoundedField): boolean {
+  return window.some(t => (t.clampedFieldCounts?.[field] ?? 0) > 0);
+}
+
+/** Apply θ_clamp_weight to a subscore iff `field` is clamped anywhere in the window. */
+function downweightIfClamped(window: TelemetryData[], field: TelemetryBoundedField, subscore: number): number {
+  return anyClampedInWindow(window, field) ? subscore * THETA_CLAMP_WEIGHT : subscore;
+}
 
 /**
  * Calculate Productivity Score [0, 1]
- * Based on: crop cycles completed, yield efficiency, water efficiency, disease control
+ * Based on: crop cycles completed, yield efficiency, water efficiency, disease control.
+ *
+ * Per-subscore clamp weighting (review §5.3):
+ *   - ndviScore-derived yield: down-weighted if any ndviScore clamping in window.
+ *   - waterUsageLiters-derived water: down-weighted if any waterUsageLiters clamping.
+ *   - soilPH-derived disease: down-weighted if any soilPH clamping AND variance is
+ *     re-computed over unclamped batches only (§5.4 fix); <3 unclamped → fall back to 0.25.
  */
 export function calculateProductivityScore(validator: ValidatorInfo): number {
   // Crop cycles metric: min 2 required, max 10 for full score
@@ -23,19 +56,33 @@ export function calculateProductivityScore(validator: ValidatorInfo): number {
   // Yield efficiency: based on NDVI (Normalized Difference Vegetation Index)
   // Higher NDVI = better vegetation health, target 0.6+
   const avgNDVI = recentTelemetry.reduce((sum, t) => sum + t.ndviScore, 0) / recentTelemetry.length;
-  const ndviScore = Math.min(avgNDVI / 0.7, 1.0); // Normalize to max 0.7
+  const ndviScoreRaw = Math.min(avgNDVI / 0.7, 1.0); // Normalize to max 0.7
+  const ndviScore = downweightIfClamped(recentTelemetry, 'ndviScore', ndviScoreRaw);
 
   // Water efficiency: lower water usage per unit of vegetation health is better
   // Baseline: 1.5 L/unit_NDVI
   const avgWaterUsage = recentTelemetry.reduce((sum, t) => sum + t.waterUsageLiters, 0) / recentTelemetry.length;
   const waterEfficiency = avgNDVI > 0 ? avgWaterUsage / (avgNDVI * 1.5) : 1.0;
-  const waterScore = Math.max(1.0 - waterEfficiency, 0); // Penalize excess water use
+  const waterScoreRaw = Math.max(1.0 - waterEfficiency, 0); // Penalize excess water use
+  const waterScore = downweightIfClamped(recentTelemetry, 'waterUsageLiters', waterScoreRaw);
 
   // Disease control: measured via soil EC (electrical conductivity) and pH balance
   // Healthy range: pH 6.0-7.5, EC 0.5-2.0. Score based on stability.
-  const pHReadings = recentTelemetry.map(t => t.soilPH);
-  const pHVariance = calculateVariance(pHReadings);
-  const diseaseScore = Math.max(1.0 - pHVariance / 2.0, 0); // Lower variance = better
+  //
+  // §5.4 fix: variance over UNCLAMPED pH readings only — otherwise a stuck-clamped
+  // pH sensor reads as perfectly stable (variance = 0) and would earn the maximum
+  // disease score. <3 unclamped readings → 0.25 (= 0.5 × θ_clamp_weight) neutral fallback.
+  const unclampedPHReadings = recentTelemetry
+    .filter(t => (t.clampedFieldCounts?.soilPH ?? 0) === 0)
+    .map(t => t.soilPH);
+  let diseaseScoreRaw: number;
+  if (unclampedPHReadings.length < 3) {
+    diseaseScoreRaw = 0.5 * THETA_CLAMP_WEIGHT; // 0.25 neutral × clamp penalty
+  } else {
+    const pHVariance = calculateVariance(unclampedPHReadings);
+    diseaseScoreRaw = Math.max(1.0 - pHVariance / 2.0, 0); // Lower variance = better
+  }
+  const diseaseScore = downweightIfClamped(recentTelemetry, 'soilPH', diseaseScoreRaw);
 
   // Normalize and average: cycle (0.2), yield (0.3), water (0.3), disease (0.2)
   const productivityScore =
@@ -64,15 +111,23 @@ export function calculateSustainabilityScore(validator: ValidatorInfo): number {
   // Formula: 1 - (actual / baseline) clamped to [0, 1]
   const totalWaterUsage = recentTelemetry.reduce((sum, t) => sum + t.waterUsageLiters, 0);
   const waterBaseline = 1000 * validator.cropCycles;
-  const waterEfficiencyScore = Math.max(1.0 - totalWaterUsage / waterBaseline, 0);
+  const waterEfficiencyScoreRaw = Math.max(1.0 - totalWaterUsage / waterBaseline, 0);
+  const waterEfficiencyScore = downweightIfClamped(recentTelemetry, 'waterUsageLiters', waterEfficiencyScoreRaw);
 
   // Carbon sequestration estimate from CO2 level reduction + NDVI
   // Formula: (baseline_co2 - current_co2) * ndvi_score / baseline_co2
   // Baseline: 400 ppm, with healthy NDVI score
+  //
+  // Per §5.3: carbon subscore is down-weighted if EITHER co2Level OR ndviScore was clamped
+  // (both inputs feed the formula). Composite: if either is clamped, apply θ_clamp_weight once.
   const avgCO2 = recentTelemetry.reduce((sum, t) => sum + t.co2Level, 0) / recentTelemetry.length;
   const avgNDVI = recentTelemetry.reduce((sum, t) => sum + t.ndviScore, 0) / recentTelemetry.length;
   const co2Baseline = 400;
-  const carbonScore = Math.max((co2Baseline - avgCO2) / co2Baseline, 0) * avgNDVI;
+  const carbonScoreRaw = Math.max((co2Baseline - avgCO2) / co2Baseline, 0) * avgNDVI;
+  const carbonClampApplies =
+    anyClampedInWindow(recentTelemetry, 'co2Level') ||
+    anyClampedInWindow(recentTelemetry, 'ndviScore');
+  const carbonScore = carbonClampApplies ? carbonScoreRaw * THETA_CLAMP_WEIGHT : carbonScoreRaw;
 
   // Chemical-free score: assume 1.0 if certified organic (would be in validator metadata)
   // For MVP, default to 0.7 (some organic practices likely, conservative estimate)

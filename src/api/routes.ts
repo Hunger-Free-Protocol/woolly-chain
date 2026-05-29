@@ -7,7 +7,7 @@ import { Router, Request, Response } from 'express';
 import { WoollyChain } from '../core';
 import { BlockProducer } from '../node/producer';
 import { generateTransactionId, generateContractId } from '../core/crypto';
-import { TransactionType } from '../core/types';
+import { TransactionType, TELEMETRY_BOUNDS, TelemetryBoundedField } from '../core/types';
 import { v4 as uuidv4 } from 'uuid';
 
 export function createRoutes(chain: WoollyChain, producer: BlockProducer): Router {
@@ -305,13 +305,70 @@ export function createRoutes(chain: WoollyChain, producer: BlockProducer): Route
 
   /**
    * POST /validator/telemetry - Submit telemetry data
+   *
+   * Validates each bounded field against TELEMETRY_BOUNDS (single source of truth
+   * shared with farm-node clamper per L002). Per architecture review §4.2:
+   *
+   *   - Optional `clampedFieldCounts: {fieldName: count}` declares which fields the
+   *     node clamped before signing. The chain trusts the declaration (signature
+   *     coverage guarantees integrity) and verifies that:
+   *     a) Every NON-clamped field is within bounds — defense in depth: if the
+   *        node sends an unclamped out-of-range value, the clamper is broken or
+   *        the payload is malformed.
+   *     b) Every CLAMPED field's submitted value is exactly at one of its bounds —
+   *        if it's not, the node lied about clamping.
    */
   router.post('/validator/telemetry', (req: Request, res: Response) => {
     try {
-      const { farmId, soilMoisture, soilPH, soilEC, airTemp, humidity, lightIntensity, waterUsageLiters, co2Level, ndviScore, crossValidationScores } = req.body;
+      const { farmId, soilMoisture, soilPH, soilEC, airTemp, humidity, lightIntensity, waterUsageLiters, co2Level, ndviScore, crossValidationScores, clampedFieldCounts } = req.body;
 
       if (!farmId) {
         return res.status(400).json({ error: 'Missing farmId' });
+      }
+
+      // Reading-level field values, keyed by bound field name
+      const fieldValues: Record<TelemetryBoundedField, number> = {
+        soilMoisture, soilPH, soilEC, airTemp, humidity,
+        lightIntensity, waterUsageLiters, co2Level, ndviScore,
+      };
+      const clamped: Partial<Record<TelemetryBoundedField, number>> = clampedFieldCounts ?? {};
+
+      // Validate the clamped declaration shape: keys must be in TELEMETRY_BOUNDS,
+      // values must be non-negative integers.
+      for (const key of Object.keys(clamped)) {
+        if (!(key in TELEMETRY_BOUNDS)) {
+          return res.status(400).json({ error: `clampedFieldCounts has unknown field: ${key}` });
+        }
+        const v = clamped[key as TelemetryBoundedField];
+        if (typeof v !== 'number' || !Number.isInteger(v) || v < 0) {
+          return res.status(400).json({ error: `clampedFieldCounts.${key} must be a non-negative integer` });
+        }
+      }
+
+      // Per-field bounds check: unclamped fields must be in range; clamped fields
+      // must be exactly at a bound.
+      for (const field of Object.keys(TELEMETRY_BOUNDS) as TelemetryBoundedField[]) {
+        const value = fieldValues[field];
+        if (value === undefined || value === null) continue; // missing optional fields are OK
+        if (typeof value !== 'number' || !Number.isFinite(value)) {
+          return res.status(400).json({ error: `${field} must be a finite number, got ${value}` });
+        }
+        const [lo, hi] = TELEMETRY_BOUNDS[field];
+        const isClamped = (clamped[field] ?? 0) > 0;
+        if (!isClamped) {
+          if (value < lo || value > hi) {
+            return res.status(400).json({
+              error: `${field}=${value} out of bounds [${lo}, ${hi}] and not declared in clampedFieldCounts`,
+            });
+          }
+        } else {
+          // Declared clamped → must equal one of the bounds
+          if (value !== lo && value !== hi) {
+            return res.status(400).json({
+              error: `${field}=${value} declared clamped but not pinned to either bound (${lo} or ${hi})`,
+            });
+          }
+        }
       }
 
       // Create telemetry submission transaction
@@ -335,17 +392,20 @@ export function createRoutes(chain: WoollyChain, producer: BlockProducer): Route
           co2Level,
           ndviScore,
           crossValidationScores,
+          clampedFieldCounts: clamped,
         },
         timestamp: Math.floor(Date.now() / 1000),
         signature: `sig_${uuidv4()}`,
       };
 
       if (chain.addTransaction(tx)) {
-        console.log(`Telemetry submitted for farm: ${farmId}`);
+        console.log(`Telemetry submitted for farm: ${farmId}` +
+          (Object.keys(clamped).length > 0 ? ` | clamped: ${JSON.stringify(clamped)}` : ''));
         res.status(201).json({
           txId,
           farmId,
           status: 'recorded',
+          clampedFieldsAccepted: Object.keys(clamped).length,
         });
       } else {
         res.status(400).json({ error: 'Telemetry submission failed' });

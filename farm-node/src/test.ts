@@ -12,6 +12,8 @@
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+// Type-only imports — erased at runtime so they don't trigger CONFIG load before env setup
+import type { SensorReading as SensorReadingT } from './sensors';
 
 // ── Test environment setup (must happen before any farm-node import) ──
 const TEST_DATA_DIR = path.join(os.tmpdir(), `woolly-farm-node-test-${process.pid}-${Date.now()}`);
@@ -192,6 +194,117 @@ async function main() {
     }
     const submitted = await chain.submitTelemetry(batch);
     assertEq(submitted, false, 'submitTelemetry against unreachable URL returns false (does not throw)');
+  }
+
+  // ── Stanza 6: clampReading pins out-of-range fields ─────────────
+  // Per architecture review §4.3 / §10 (CR1 revised).
+  banner('Stanza 6 — clampReading pins out-of-range fields');
+  {
+    const { clampReading } = await import('./sensors');
+    const bad: any = {
+      timestamp: Date.now() / 1000,
+      farmId: 'FARM-TEST-001',
+      soilMoisture: 0.5,         // in range
+      soilPH: -47,               // way below 3.0 → clamp to 3.0
+      soilEC: 99,                // way above 5 → clamp to 5
+      airTemp: 25,               // in range
+      humidity: 50,              // in range
+      lightIntensity: 200000,    // above 100000 → clamp to 100000
+      waterUsageLiters: 5,       // in range
+      co2Level: 400,             // in range
+      ndviScore: 0.8,            // in range
+    };
+    const { reading: clean, clamped } = clampReading(bad);
+    assertEq(clean.soilPH, 3.0, 'soilPH pinned to lower bound 3.0');
+    assertEq(clean.soilEC, 5, 'soilEC pinned to upper bound 5');
+    assertEq(clean.lightIntensity, 100000, 'lightIntensity pinned to upper bound 100000');
+    assertEq(clean.soilMoisture, 0.5, 'in-range field untouched');
+    assertEq(clamped.length, 3, 'three fields reported as clamped');
+    assert(clamped.includes('soilPH'), 'clamped list contains soilPH');
+    assert(clamped.includes('soilEC'), 'clamped list contains soilEC');
+    assert(clamped.includes('lightIntensity'), 'clamped list contains lightIntensity');
+    assert(bad.soilPH === -47, 'clampReading does not mutate the input');
+
+    // All-in-bounds case yields empty clamped
+    const good = readSensors();
+    const { clamped: noClamps } = clampReading(good);
+    assertEq(noClamps.length, 0, 'in-range reading yields empty clamped list');
+  }
+
+  // ── Stanza 7: clampedFieldCounts aggregates across readings ─────
+  banner('Stanza 7 — clampedFieldCounts aggregates per batch');
+  {
+    const id = loadOrCreateIdentity();
+    const tm = new TelemetryManager(id.address, id.privateKey);
+
+    // Inject 4 readings; pH out of range on 3 of them, EC out of range on 1
+    const now = Date.now() / 1000;
+    const mk = (overrides: Partial<SensorReadingT>): SensorReadingT => ({
+      timestamp: now,
+      farmId: 'FARM-TEST-001',
+      soilMoisture: 0.4, soilPH: 6.5, soilEC: 1.5, airTemp: 28, humidity: 60,
+      lightIntensity: 500, waterUsageLiters: 2, co2Level: 400, ndviScore: 0.8,
+      ...overrides,
+    });
+    tm.addReading(mk({ soilPH: -10 }));   // clamps soilPH
+    tm.addReading(mk({ soilPH: 99 }));    // clamps soilPH
+    tm.addReading(mk({ soilPH: 100, soilEC: 99 })); // clamps both
+    tm.addReading(mk({}));                // clean
+    const batch = tm.sealBatch();
+    assert(batch !== null, 'sealed a batch with mixed clamping');
+    if (!batch) return;
+    const counts = batch.aggregated.clampedFieldCounts;
+    assertEq(counts.soilPH, 3, 'soilPH clamped on 3 of 4 readings');
+    assertEq(counts.soilEC, 1, 'soilEC clamped on 1 of 4 readings');
+    assertEq(counts.airTemp ?? 0, 0, 'airTemp not in clampedFieldCounts (zero clamps omitted)');
+    assertEq(batch.aggregated.readingCount, 4, 'all 4 readings sealed (clamped, not dropped)');
+
+    // The signed canonical JSON includes clampedFieldCounts → tampering breaks the signature
+    const canonical = JSON.stringify({
+      farmId: batch.farmId,
+      nodeAddress: batch.nodeAddress,
+      aggregated: batch.aggregated,
+      readingCount: batch.readings.length,
+    });
+    assert(verifySignature(canonical, batch.signature, id.publicKey),
+      'signature verifies against canonical JSON that includes clampedFieldCounts');
+
+    const tampered = JSON.stringify({
+      farmId: batch.farmId,
+      nodeAddress: batch.nodeAddress,
+      aggregated: { ...batch.aggregated, clampedFieldCounts: {} },
+      readingCount: batch.readings.length,
+    });
+    assert(!verifySignature(tampered, batch.signature, id.publicKey),
+      'signature rejects a payload with clampedFieldCounts forged to {}');
+  }
+
+  // ── Stanza 8: timestamp drift drops the reading (NOT clamped) ───
+  // Per architecture review §6: timestamps are not clampable; out-of-range drops.
+  banner('Stanza 8 — timestamp drift drops, does not clamp');
+  {
+    const id = loadOrCreateIdentity();
+    const tm = new TelemetryManager(id.address, id.privateKey);
+    const statsBefore = tm.getStats();
+
+    // Inject a reading with a timestamp from 2024 (way outside ±5 min)
+    const stale: SensorReadingT = {
+      timestamp: 1704067200,   // 2024-01-01 00:00:00 UTC
+      farmId: 'FARM-TEST-001',
+      soilMoisture: 0.4, soilPH: 6.5, soilEC: 1.5, airTemp: 28, humidity: 60,
+      lightIntensity: 500, waterUsageLiters: 2, co2Level: 400, ndviScore: 0.8,
+    };
+    const accepted = tm.addReading(stale);
+    assertEq(accepted, false, 'addReading returns false for stale timestamp');
+    const statsAfter = tm.getStats();
+    assertEq(statsAfter.droppedReadings - statsBefore.droppedReadings, 1,
+      'droppedReadings counter incremented by 1');
+    assertEq(statsAfter.currentReadings, 0, 'no reading added to current batch');
+
+    // A fresh reading still works
+    const fresh = readSensors();
+    assertEq(tm.addReading(fresh), true, 'fresh-timestamp reading is accepted');
+    assertEq(tm.getStats().currentReadings, 1, 'current batch has 1 reading after fresh add');
   }
 
   // ── Summary ─────────────────────────────────────────────────────

@@ -12,6 +12,7 @@
  */
 
 import { CONFIG } from './config';
+import { TELEMETRY_BOUNDS, TelemetryBoundedField } from '../../src/core/types';
 
 export interface SensorReading {
   timestamp: number;
@@ -25,6 +26,44 @@ export interface SensorReading {
   waterUsageLiters: number; // cumulative since last reading
   co2Level: number;         // ppm (estimated if no sensor)
   ndviScore: number;        // 0-1 (estimated/placeholder for prototype)
+}
+
+/**
+ * Clamp a sensor reading's out-of-range fields to the nearest bound.
+ *
+ * Per architecture review §4.3 (docs/architecture-reviews/farm-node-clamp-flag.md):
+ *   - Iterates each field with a bound in TELEMETRY_BOUNDS.
+ *   - If the value is outside the bound, pins it to the nearest bound AND
+ *     adds the field name to the `clamped` list.
+ *   - Timestamp check is separate (handled in telemetry.ts addReading) and
+ *     does NOT clamp; out-of-range timestamps drop the reading entirely.
+ *
+ * The clamped reading enters the signed batch; the per-batch counts of
+ * which fields were clamped (across all readings) are submitted to chain
+ * via the `clampedFieldCounts` aggregate so PoN scoring can apply
+ * per-subscore weighting (Option B refined per §5.3 of the review).
+ *
+ * Returns a NEW reading object; the input is not mutated.
+ */
+export function clampReading(reading: SensorReading): { reading: SensorReading; clamped: TelemetryBoundedField[] } {
+  const out: SensorReading = { ...reading };
+  const clamped: TelemetryBoundedField[] = [];
+
+  const outAny = out as unknown as Record<string, number>;
+  (Object.keys(TELEMETRY_BOUNDS) as TelemetryBoundedField[]).forEach(field => {
+    const [lo, hi] = TELEMETRY_BOUNDS[field];
+    const v = outAny[field];
+    if (typeof v !== 'number' || !Number.isFinite(v)) return;
+    if (v < lo) {
+      outAny[field] = lo;
+      clamped.push(field);
+    } else if (v > hi) {
+      outAny[field] = hi;
+      clamped.push(field);
+    }
+  });
+
+  return { reading: out, clamped };
 }
 
 // ── Serial Reader ────────────────────────────────────────────────
