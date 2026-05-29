@@ -279,9 +279,137 @@ async function main() {
       'signature rejects a payload with clampedFieldCounts forged to {}');
   }
 
-  // ── Stanza 8: timestamp drift drops the reading (NOT clamped) ───
+  // ── Stanza 8: backoff schedule + jitter ─────────────────────────
+  // Per docs/change-requests/farm-node-submission-backoff.md
+  // Verifies the deterministic schedule + jitter bounds.
+  banner('Stanza 8 — Backoff schedule + jitter');
+  {
+    const { scheduleFor, jitter, BACKOFF_CAP_MS } = await import('./telemetry');
+    assertEq(scheduleFor(1), 5 * 60 * 1000,  'attempt 1 → 5 min');
+    assertEq(scheduleFor(2), 10 * 60 * 1000, 'attempt 2 → 10 min');
+    assertEq(scheduleFor(3), 20 * 60 * 1000, 'attempt 3 → 20 min');
+    assertEq(scheduleFor(4), 40 * 60 * 1000, 'attempt 4 → 40 min');
+    assertEq(scheduleFor(5), BACKOFF_CAP_MS, 'attempt 5 → 30 min cap');
+    assertEq(scheduleFor(99), BACKOFF_CAP_MS, 'attempt 99 → 30 min cap');
+    assertEq(scheduleFor(0), 0,              'attempt 0 → 0 (no failure yet)');
+
+    // Jitter: rng=0 → 0.9× delay; rng=1 → 1.1× delay; rng=0.5 → 1.0× delay
+    const base = 60_000;
+    assertEq(jitter(base, () => 0),    Math.round(base * 0.9), 'rng=0 → 0.9× delay (-10%)');
+    assertEq(jitter(base, () => 1),    Math.round(base * 1.1), 'rng=1 → 1.1× delay (+10%)');
+    assertEq(jitter(base, () => 0.5),  base,                   'rng=0.5 → 1.0× delay (no jitter)');
+
+    // 3 sequential failures on the same batch advance attempts + nextRetryAt
+    // per the schedule. Use deterministic rng=0.5 (no jitter) for exact comparison.
+    const id = loadOrCreateIdentity();
+    const tm = new TelemetryManager(id.address, id.privateKey);
+    tm.addReading(readSensors());
+    const batch = tm.sealBatch();
+    assert(batch !== null, 'sealed a batch for backoff test');
+    if (!batch) return;
+    assertEq(batch.attempts, 0,            'fresh batch: attempts = 0');
+
+    const t0 = 1_000_000_000_000; // fixed clock
+    const noJitter = () => 0.5;
+    tm.markFailed(batch.id, noJitter, t0);
+    const after1 = tm.getPendingBatches().find(b => b.id === batch.id)!;
+    assertEq(after1.attempts, 1,                       'after 1 failure: attempts = 1');
+    assertEq(after1.nextRetryAt, t0 + 5  * 60 * 1000,  'after 1 failure: +5 min');
+
+    tm.markFailed(batch.id, noJitter, t0);
+    const after2 = tm.getPendingBatches().find(b => b.id === batch.id)!;
+    assertEq(after2.attempts, 2,                       'after 2 failures: attempts = 2');
+    assertEq(after2.nextRetryAt, t0 + 10 * 60 * 1000,  'after 2 failures: +10 min');
+
+    tm.markFailed(batch.id, noJitter, t0);
+    const after3 = tm.getPendingBatches().find(b => b.id === batch.id)!;
+    assertEq(after3.attempts, 3,                       'after 3 failures: attempts = 3');
+    assertEq(after3.nextRetryAt, t0 + 20 * 60 * 1000,  'after 3 failures: +20 min');
+  }
+
+  // ── Stanza 9: success on one batch resets others' nextRetryAt ──
+  // The most likely-to-be-subtly-wrong piece per CR §WHY. Pin it down.
+  banner('Stanza 9 — Success resets other batches\' nextRetryAt');
+  {
+    const id = loadOrCreateIdentity();
+    const tm = new TelemetryManager(id.address, id.privateKey);
+
+    // Batch A: seal + mark failed (now mid-backoff, nextRetryAt = far future)
+    tm.addReading(readSensors());
+    const batchA = tm.sealBatch();
+    if (!batchA) { fail('could not seal batchA'); return; }
+    const t0 = Date.now();
+    tm.markFailed(batchA.id, () => 0.5, t0); // no jitter, scheduled +5 min
+    const aMid = tm.getPendingBatches().find(b => b.id === batchA.id)!;
+    assert(aMid.nextRetryAt > t0 + 4 * 60 * 1000, 'batchA is mid-backoff (>4 min in future)');
+    assertEq(aMid.attempts, 1, 'batchA attempts = 1 after one failure');
+
+    // Batch B: seal fresh — nextRetryAt = ~now
+    tm.addReading(readSensors());
+    const batchB = tm.sealBatch();
+    if (!batchB) { fail('could not seal batchB'); return; }
+    assertEq(batchB.attempts, 0, 'batchB fresh: attempts = 0');
+    assert(batchB.nextRetryAt <= Date.now(), 'batchB eligible immediately');
+
+    // getEligibleBatches at now() should include B but NOT A
+    const eligibleNow = tm.getEligibleBatches();
+    assert(eligibleNow.some(b => b.id === batchB.id), 'batchB is eligible now');
+    assert(!eligibleNow.some(b => b.id === batchA.id), 'batchA NOT eligible now (in backoff)');
+
+    // Mark B submitted → triggers reset of all other batches' nextRetryAt
+    tm.markSubmitted(batchB.id);
+    const aAfter = tm.getPendingBatches().find(b => b.id === batchA.id)!;
+    assert(aAfter !== undefined, 'batchA still pending after B submitted');
+    assert(aAfter.nextRetryAt <= Date.now() + 100,
+      'batchA.nextRetryAt reset to now (within 100ms) after B success');
+    assertEq(aAfter.attempts, 1,
+      'batchA.attempts preserved at 1 (history not erased) — only nextRetryAt reset');
+
+    // batchA is now eligible immediately on next loop iteration
+    const eligibleAfter = tm.getEligibleBatches();
+    assert(eligibleAfter.some(b => b.id === batchA.id),
+      'batchA eligible immediately after B success');
+  }
+
+  // ── Stanza 10: buffer migration adds backoff fields ──────────────
+  // Pre-CR3 buffer files have no `attempts` / `nextRetryAt`. Loader must
+  // default them so a Pi that upgrades mid-outage doesn't lose pending batches.
+  banner('Stanza 10 — Buffer migration: missing backoff fields default cleanly');
+  {
+    const id = loadOrCreateIdentity();
+    const bufferFile = path.join(TEST_DATA_DIR, 'telemetry_buffer.json');
+
+    // Write a pre-CR3 buffer (no attempts / nextRetryAt) directly to disk
+    const preCR3Batch = {
+      id: 'legacy-batch-test',
+      farmId: 'FARM-TEST-001',
+      nodeAddress: id.address,
+      readings: [],
+      aggregated: {
+        periodStart: 1, periodEnd: 2, readingCount: 0,
+        avgSoilMoisture: 0, avgSoilPH: 0, avgSoilEC: 0,
+        avgAirTemp: 0, avgHumidity: 0, avgLightIntensity: 0,
+        totalWaterUsageLiters: 0, avgCo2Level: 0, avgNdviScore: 0,
+        // NB: no clampedFieldCounts either — also tests Stanza-4 migration
+      },
+      signature: 'legacy-sig',
+    };
+    fs.writeFileSync(bufferFile, JSON.stringify([preCR3Batch], null, 2));
+
+    const tm = new TelemetryManager(id.address, id.privateKey);
+    const loaded = tm.getPendingBatches();
+    assertEq(loaded.length, 1, 'legacy buffer batch loaded');
+    assertEq(loaded[0].attempts, 0, 'missing attempts defaulted to 0');
+    assert(typeof loaded[0].nextRetryAt === 'number', 'missing nextRetryAt defaulted to a number');
+    assert(loaded[0].nextRetryAt <= Date.now() + 100,
+      'missing nextRetryAt defaulted to ~now (eligible immediately)');
+    assert(loaded[0].aggregated.clampedFieldCounts !== undefined,
+      'missing clampedFieldCounts defaulted to {} (Stanza 4 migration still works)');
+  }
+
+  // ── Stanza 11: timestamp drift drops the reading (NOT clamped) ──
   // Per architecture review §6: timestamps are not clampable; out-of-range drops.
-  banner('Stanza 8 — timestamp drift drops, does not clamp');
+  banner('Stanza 11 — timestamp drift drops, does not clamp');
   {
     const id = loadOrCreateIdentity();
     const tm = new TelemetryManager(id.address, id.privateKey);

@@ -85,28 +85,27 @@ async function main() {
     telemetry.addReading(reading);
   }, CONFIG.sensorPollIntervalMs);
 
-  // ── 5. Telemetry submission loop ───────────────────────────
+  // ── 5. Telemetry submission loop (per-batch exponential backoff) ─
+  // Per docs/change-requests/farm-node-submission-backoff.md.
+  // Each batch carries its own attempts + nextRetryAt. We seal any
+  // pending readings, then try every batch whose backoff has expired.
+  // Success on any batch resets all OTHER batches' nextRetryAt to now
+  // (chain is back up → don't wait through stale backoffs).
   const submitLoop = setInterval(async () => {
-    // Seal current readings into a signed batch
-    const batch = telemetry.sealBatch();
-    if (!batch) return;
+    // Seal current readings (sealBatch initializes attempts=0, nextRetryAt=now)
+    telemetry.sealBatch();
 
-    // Try to submit to chain
-    const success = await chain.submitTelemetry(batch);
-    printSubmissionResult(success, batch.id);
-
-    if (success) {
-      telemetry.markSubmitted(batch.id);
-    }
-
-    // Retry any previously failed batches
-    const pending = telemetry.getPendingBatches();
-    for (const old of pending) {
-      if (old.id === batch.id) continue;  // skip the one we just tried
-      const retryOk = await chain.submitTelemetry(old);
-      if (retryOk) {
-        telemetry.markSubmitted(old.id);
-        console.log(`  \x1b[32m✓\x1b[0m Retried batch ${old.id.slice(0, 8)} — submitted`);
+    // Try every batch eligible for an attempt right now
+    const eligible = telemetry.getEligibleBatches();
+    for (const batch of eligible) {
+      const success = await chain.submitTelemetry(batch);
+      printSubmissionResult(success, batch.id);
+      if (success) {
+        // markSubmitted also resets nextRetryAt on every OTHER batch — chain is up
+        telemetry.markSubmitted(batch.id);
+      } else {
+        // Increment attempts + compute next backoff with ±10% jitter
+        telemetry.markFailed(batch.id);
       }
     }
 

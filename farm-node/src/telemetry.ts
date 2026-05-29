@@ -29,6 +29,42 @@ export type ClampedFieldCounts = Partial<Record<TelemetryBoundedField, number>>;
  */
 export const TIMESTAMP_DRIFT_TOLERANCE_SEC = 5 * 60;
 
+/**
+ * Exponential backoff schedule per CR docs/change-requests/farm-node-submission-backoff.md.
+ * Index = attempts-1. After the array is exhausted, BACKOFF_CAP_MS applies.
+ *   Attempt 1 fails → wait 5 min
+ *   Attempt 2 fails → wait 10 min
+ *   Attempt 3 fails → wait 20 min
+ *   Attempt 4 fails → wait 40 min
+ *   Attempt 5+ fails → wait 30 min (cap)
+ */
+export const BACKOFF_SCHEDULE_MS = [
+  5 * 60 * 1000,
+  10 * 60 * 1000,
+  20 * 60 * 1000,
+  40 * 60 * 1000,
+];
+export const BACKOFF_CAP_MS = 30 * 60 * 1000;
+
+/**
+ * Returns the deterministic backoff delay (ms) for a given attempt count
+ * (1-indexed: 1 = first failure). Applied BEFORE jitter.
+ */
+export function scheduleFor(attempts: number): number {
+  if (attempts < 1) return 0;
+  if (attempts <= BACKOFF_SCHEDULE_MS.length) return BACKOFF_SCHEDULE_MS[attempts - 1];
+  return BACKOFF_CAP_MS;
+}
+
+/**
+ * Apply ±10% jitter to a delay. Prevents thundering-herd when many farms
+ * come back online simultaneously after a regional outage (CR §3).
+ * Pass a deterministic rng for reproducible tests.
+ */
+export function jitter(delayMs: number, rng: () => number = Math.random): number {
+  return Math.round(delayMs * (0.9 + rng() * 0.2));
+}
+
 export interface TelemetryBatch {
   id: string;
   farmId: string;
@@ -37,6 +73,19 @@ export interface TelemetryBatch {
   aggregated: AggregatedTelemetry;
   signature: string;
   submittedAt?: number;
+  /**
+   * Number of failed submission attempts so far. Initialized to 0 on seal.
+   * Per CR §ACCEPTANCE: incremented on every failure; preserved (not reset)
+   * when another batch's success forces an immediate retry on this one.
+   */
+  attempts: number;
+  /**
+   * Earliest unix ms at which this batch is eligible for the next submit attempt.
+   * Initialized to Date.now() on seal (immediate first attempt).
+   * On failure: Date.now() + jitter(scheduleFor(attempts)).
+   * On any OTHER batch's success: reset to Date.now() (immediate retry).
+   */
+  nextRetryAt: number;
 }
 
 export interface AggregatedTelemetry {
@@ -159,6 +208,8 @@ export class TelemetryManager {
       readings: [...this.readings],
       aggregated,
       signature,
+      attempts: 0,           // fresh batch — first attempt scheduled immediately
+      nextRetryAt: Date.now(),
     };
 
     this.pendingBatches.push(batch);
@@ -187,26 +238,84 @@ export class TelemetryManager {
   }
 
   /**
-   * Mark a batch as successfully submitted
+   * Mark a batch as successfully submitted.
+   *
+   * Per CR §ACCEPTANCE (success-resets-others semantics): on any successful
+   * submission, every OTHER pending batch's nextRetryAt is reset to Date.now()
+   * (immediate retry on next loop iteration). Their `attempts` counter is
+   * preserved for logging but not used for the immediately-next schedule.
+   * Rationale: a successful submit indicates the chain is back up.
    */
   markSubmitted(batchId: string): void {
+    const submittedBatch = this.pendingBatches.find(b => b.id === batchId);
+    if (!submittedBatch) return; // nothing to do — caller can no-op safely
+
     this.pendingBatches = this.pendingBatches.filter(b => b.id !== batchId);
     this.submittedCount++;
+
+    // Reset every other batch's nextRetryAt so they retry immediately on next loop
+    const now = Date.now();
+    for (const other of this.pendingBatches) {
+      other.nextRetryAt = now;
+    }
+
     this.saveBuffer();
   }
 
   /**
-   * Get stats. Per architecture review §7:
+   * Mark a batch's submission attempt as failed. Increments attempts and
+   * schedules the next retry with jitter.
+   *
+   * Pass a deterministic rng for reproducible tests; defaults to Math.random.
+   * `nowMs` defaults to Date.now() — overridable for tests that need a
+   * deterministic clock.
+   */
+  markFailed(batchId: string, rng: () => number = Math.random, nowMs: number = Date.now()): void {
+    const batch = this.pendingBatches.find(b => b.id === batchId);
+    if (!batch) return;
+    batch.attempts += 1;
+    const baseDelay = scheduleFor(batch.attempts);
+    batch.nextRetryAt = nowMs + jitter(baseDelay, rng);
+    this.saveBuffer();
+  }
+
+  /**
+   * Returns pending batches eligible for a submission attempt right now
+   * (nextRetryAt <= now). Batches still in backoff are filtered out.
+   */
+  getEligibleBatches(nowMs: number = Date.now()): TelemetryBatch[] {
+    return this.pendingBatches.filter(b => b.nextRetryAt <= nowMs);
+  }
+
+  /**
+   * Get stats. Per architecture review §7 + CR §ACCEPTANCE (no-expiry buffer visibility):
    *   - droppedReadings: count of timestamp-drift drops (clamping never drops).
    *   - clampedFieldCount: total field-clamps across this manager's lifetime.
+   *   - bufferSizeBatches: how many pending batches currently buffered.
+   *   - bufferOldestSecondsAgo: seconds since the oldest pending batch's last
+   *     reading; null if no pending batches. Useful to see buffer growth under
+   *     a sustained chain outage (CR3 chose "no expiry"; this stat is the
+   *     instrumentation that justifies revisiting in v0.3 if files balloon).
+   *   - maxAttemptsInBuffer: highest attempts count across pending batches.
    */
   getStats() {
+    const now = Date.now();
+    const oldestPeriodEndSec = this.pendingBatches.length > 0
+      ? Math.min(...this.pendingBatches.map(b => b.aggregated.periodEnd))
+      : null;
     return {
       currentReadings: this.readings.length,
       pendingBatches: this.pendingBatches.length,
       totalSubmitted: this.submittedCount,
       droppedReadings: this.droppedReadings,
       clampedFieldCount: this.clampedFieldCount,
+      bufferSizeBatches: this.pendingBatches.length,
+      bufferOldestSecondsAgo: oldestPeriodEndSec !== null
+        ? Math.round(now / 1000 - oldestPeriodEndSec)
+        : null,
+      maxAttemptsInBuffer: this.pendingBatches.length > 0
+        ? Math.max(...this.pendingBatches.map(b => b.attempts))
+        : 0,
     };
   }
 
@@ -268,20 +377,26 @@ export class TelemetryManager {
   /**
    * Load buffered batches from disk (resume after restart).
    *
-   * Migration: pre-clamp-flag buffer files have no `clampedFieldCounts` in
-   * their aggregated struct. Default it to `{}` on load so the new schema
-   * holds invariantly (architecture review §9 migration / back-compat).
+   * Migrations applied on read:
+   *   1. Pre-clamp-flag buffer files have no `clampedFieldCounts` in their
+   *      aggregated struct. Default to `{}` (architecture review §9).
+   *   2. Pre-backoff buffer files have no `attempts` / `nextRetryAt` on the
+   *      batch. Default attempts=0 and nextRetryAt=Date.now() so they replay
+   *      immediately on first run after the upgrade (CR §ACCEPTANCE).
    */
   private loadBuffer(): void {
     try {
       if (fs.existsSync(BUFFER_FILE)) {
         const raw: TelemetryBatch[] = JSON.parse(fs.readFileSync(BUFFER_FILE, 'utf-8'));
+        const now = Date.now();
         this.pendingBatches = raw.map(b => ({
           ...b,
           aggregated: {
             ...b.aggregated,
             clampedFieldCounts: b.aggregated?.clampedFieldCounts ?? {},
           },
+          attempts: typeof b.attempts === 'number' ? b.attempts : 0,
+          nextRetryAt: typeof b.nextRetryAt === 'number' ? b.nextRetryAt : now,
         }));
         if (this.pendingBatches.length > 0) {
           console.log(`[telemetry] Loaded ${this.pendingBatches.length} buffered batches from disk`);
