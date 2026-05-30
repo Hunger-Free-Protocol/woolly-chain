@@ -894,6 +894,10 @@ interface FourMechanismResult {
  * Volume-weighted aggregate across crop mix should reproduce ~14.6% (V2 headline)
  * within ±2pp per L011.
  */
+// One-time guard so a net-negative channel-substitution regime warns once
+// rather than spamming the per-cycle loop (code-review #6).
+let warnedNegativeChannel = false;
+
 function computeFourMechanisms(cropName: string, learningCurve: number): FourMechanismResult {
   const rd = CONFIG.revenueDecomposition;
 
@@ -906,6 +910,15 @@ function computeFourMechanisms(cropName: string, learningCurve: number): FourMec
   const qcShift = cs.qcommerceShareBaseline - cs.qcommerceShareWoolly;  // 0.20 default
   const netPerUnitShifted = cs.woollyD2CConsumerPriceRel * (1 - cs.woollyFee) - 1.0 * (1 - cs.qcommerceCommission);
   const channelGain = qcShift * netPerUnitShifted;
+  // NOTE (code-review #6): the lower clamp at 0 floors a net-negative channel-
+  // substitution regime (would occur if woollyD2CConsumerPriceRel drops far
+  // enough that netPerUnitShifted < 0). At current config netPerUnitShifted > 0
+  // so this is inert today; surface a one-time warning if the regime flips so a
+  // bad parameter set fails visibly rather than silently reading as zero uplift.
+  if (channelGain < 0 && !warnedNegativeChannel) {
+    warnedNegativeChannel = true;
+    console.warn(`[four-mechanism] channel-substitution net-negative (channelGain=${channelGain.toFixed(4)}); clamped to 0 — check woollyD2CConsumerPriceRel`);
+  }
   const channelPp = clamp(channelGain * 100 * learningCurve * gaussian(1.0, 0.05), 0, 5);
 
   // ── Spoilage reduction (Doc 2 §5.2) ──
@@ -1551,7 +1564,7 @@ function runSimulation() {
     // Climate-CO₂e categories
     'water_pumping_g_per_kg', 'fertilizer_mfg_g_per_kg', 'field_N2O_g_per_kg',
     'transport_g_per_kg', 'spoilage_avoided_g_per_kg',
-    'soil_carbon_preserved_g_per_kg',          // PATH E
+    'avoided_land_degradation_gCO2e_per_kg',   // PATH E (avoided cultivated-land SOC loss from displaced conventional produce; NOT in-situ hydroponic soil carbon — L026)
     'rooftop_UHI_g_per_kg',                    // PATH E
     'LED_added_g_per_kg', 'HVAC_added_g_per_kg',
     'net_avoided_g_per_kg',

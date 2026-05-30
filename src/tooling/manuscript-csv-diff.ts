@@ -147,15 +147,34 @@ const MANIFEST: Check[] = [
   // ── §4.6 cross-validation @ 5 nodes/km² = 95.4% (±2pp) ──
   { label: '§4.6 cross-val @5 nodes (95.4)', csv: 'cross_validation_summary.csv', manuscript: 95.4, tolerancePp: 2.0,
     agg: { kind: 'rowValue', matchCol: 'node_density_per_km2', matchVal: '5', col: 'cross_validation_accuracy_pct' } },
+
+  // ── §4.2 authority ablation: DECLARED design-target values (authority-level
+  // behavior is not yet modeled in the sim — see §4.2 caption + Doc 5 §4.2).
+  // Gated exact-match (tol 0.05) so the declared CSV cannot silently drift from
+  // manuscript Table 2 — closes the gap where the gate previously exempted this
+  // table entirely (code-review BLOCKER, L024/L027). v0.2 replaces with a real
+  // authority_ablation_emitter. ──
+  { label: '§4.2 authority: full-autonomy water (declared 23.1)', csv: 'authority_ablation_summary.csv', manuscript: 23.1, tolerancePp: 0.05,
+    agg: { kind: 'rowValue', matchCol: 'authority_level', matchVal: 'full_autonomy', col: 'water_saved_pct' } },
+  { label: '§4.2 authority: HITL>$50 water (declared 22.4)', csv: 'authority_ablation_summary.csv', manuscript: 22.4, tolerancePp: 0.05,
+    agg: { kind: 'rowValue', matchCol: 'authority_level', matchVal: 'hitl_gt_50usd', col: 'water_saved_pct' } },
+  { label: '§4.2 authority: advisory-only water (declared 8.2)', csv: 'authority_ablation_summary.csv', manuscript: 8.2, tolerancePp: 0.05,
+    agg: { kind: 'rowValue', matchCol: 'authority_level', matchVal: 'advisory_only', col: 'water_saved_pct' } },
 ];
 
-// Calibration-band claims (L039/L011): literature anchor must sit within ±2pp of
-// the sim value the manuscript reports — this IS the calibration claim.
-const CALIBRATION: { label: string; anchor: number; sim: number; tolerancePp: number }[] = [
-  { label: 'water 27.7 lit ↔ 26.4 sim', anchor: 27.7, sim: 26.4, tolerancePp: 2.0 },
-  { label: 'nutrient 24.4 lit ↔ 23.3 sim', anchor: 24.4, sim: 23.3, tolerancePp: 2.0 },
-  { label: 'yield 22.9 lit ↔ 21.7 sim', anchor: 22.9, sim: 21.7, tolerancePp: 2.0 },
-  { label: 'uplift 14.6 headline ↔ 16.27 eco-mean', anchor: 14.6, sim: 16.27, tolerancePp: 2.5 },
+// Calibration-band claims (L039/L011): the literature anchor must sit within
+// tolerance of the SIMULATION value the manuscript reports. The sim side is read
+// LIVE from the CSV via evaluate() (not a source literal) — otherwise this would
+// be a tautology that always passes regardless of sim output (code-review P1).
+const CALIBRATION: { label: string; anchor: number; tolerancePp: number; csv: string; agg: Aggregate }[] = [
+  { label: 'water 27.7 lit ↔ sim', anchor: 27.7, tolerancePp: 2.0, csv: 'crop_type_summary.csv',
+    agg: { kind: 'meanAcrossSynonym', tableKey: 'table1', paperHeader: 'Water reduction %' } },
+  { label: 'nutrient 24.4 lit ↔ sim', anchor: 24.4, tolerancePp: 2.0, csv: 'crop_type_summary.csv',
+    agg: { kind: 'meanAcrossSynonym', tableKey: 'table1', paperHeader: 'Nutrient reduction %' } },
+  { label: 'yield 22.9 lit ↔ sim', anchor: 22.9, tolerancePp: 2.0, csv: 'crop_type_summary.csv',
+    agg: { kind: 'meanAcrossSynonym', tableKey: 'table1', paperHeader: 'Yield increase %' } },
+  { label: 'uplift 14.6 headline ↔ eco-mean', anchor: 14.6, tolerancePp: 2.5, csv: 'four_mechanism_summary.csv',
+    agg: { kind: 'rowValue', matchCol: 'mechanism', matchVal: 'total_uplift', col: 'mean_contribution_pp' } },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -204,11 +223,19 @@ function main(): void {
     }
   }
 
-  console.log(`\n  ${DIM}Calibration-band claims (literature anchor ↔ sim, L039/L011):${RST}`);
+  console.log(`\n  ${DIM}Calibration-band claims (literature anchor ↔ CSV-derived sim, L039/L011):${RST}`);
   for (const cb of CALIBRATION) {
-    const delta = Math.abs(cb.anchor - cb.sim);
+    let sim: number;
+    try {
+      sim = evaluate({ label: cb.label, csv: cb.csv, manuscript: cb.anchor, tolerancePp: cb.tolerancePp, agg: cb.agg });
+    } catch (err: any) {
+      failures.push(`${cb.label}: ${err.message}`);
+      console.log(`  ${RED}✗${RST} ${cb.label} — ${err.message}`);
+      continue;
+    }
+    const delta = Math.abs(cb.anchor - sim);
     const ok = delta <= cb.tolerancePp + 1e-9;
-    const line = `${cb.label} (Δ${delta.toFixed(2)} ≤ ${cb.tolerancePp})`;
+    const line = `${cb.label}: anchor ${cb.anchor} ↔ CSV-sim ${sim.toFixed(2)} (Δ${delta.toFixed(2)} ≤ ${cb.tolerancePp})`;
     if (ok) {
       console.log(`  ${GREEN}✓${RST} ${line}`);
     } else {

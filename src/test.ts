@@ -24,6 +24,7 @@ import { FarmEquityToken } from './tokens/farm-equity';
 import { CropCycleToken } from './tokens/crop-cycle';
 import { CarbonToken } from './tokens/carbon';
 import { ContributionContract } from './contracts/contribution';
+import { csvToTableAligner } from './tooling/manuscript-csv-diff';
 import { v4 as uuidv4 } from 'uuid';
 
 // ─── Helpers ───────────────────────────────────────────────────────
@@ -939,7 +940,7 @@ async function main() {
     for (const r of lcaRows) {
       const cats = ['water_pumping_g_per_kg', 'fertilizer_mfg_g_per_kg', 'field_N2O_g_per_kg',
                     'transport_g_per_kg', 'spoilage_avoided_g_per_kg',
-                    'soil_carbon_preserved_g_per_kg', 'rooftop_UHI_g_per_kg'];
+                    'avoided_land_degradation_gCO2e_per_kg', 'rooftop_UHI_g_per_kg'];
       const adds = ['LED_added_g_per_kg', 'HVAC_added_g_per_kg'];
       const savings = cats.reduce((a, c) => a + parseFloat(r[c]), 0);
       const added = adds.reduce((a, c) => a + parseFloat(r[c]), 0);
@@ -977,11 +978,12 @@ async function main() {
         `${r['crop']}: rooftop UHI ${uhi}g/kg matches formula (10 × 0.70 × 0.71 × 0.30 × 1000 = 1491)`);
     }
 
-    // T7: Path E — Soil carbon preserved is non-zero (73 g/kg at 5 kg/m² density × 1 tC/ha/yr)
+    // T7: Path E — Avoided land degradation is non-zero (73 g/kg at 5 kg/m² density × 1 tC/ha/yr)
+    // (counterfactual cultivated-land SOC loss avoided by displacing conventional produce — NOT in-situ hydroponic soil carbon, L026)
     for (const r of lcaRows) {
-      const soc = parseFloat(r['soil_carbon_preserved_g_per_kg']);
+      const soc = parseFloat(r['avoided_land_degradation_gCO2e_per_kg']);
       assert(Math.abs(soc - 73.33) < 0.5,
-        `${r['crop']}: soil C preserved ${soc}g/kg matches formula (1/5 × 1tC × 44/12 / 1e4 × 1e6 = 73.33)`);
+        `${r['crop']}: avoided land degradation ${soc}g/kg matches formula (1/5 × 1tC × 44/12 / 1e4 × 1e6 = 73.33)`);
     }
 
     // T8: Path E — Eutrophication indicator non-zero and crop-specific
@@ -1005,6 +1007,22 @@ async function main() {
     console.log(`  Deployment: ${lettRow['deployment_model'].replace(/"/g, '')}`);
   } else {
     console.log(`  ⊘ simulation-output/avoided_emissions_summary.csv not found — skipping`);
+  }
+  console.log('');
+
+  // ── 14. L3 reproducibility gate: csv_to_table_aligner (Module 13 — L036) ──
+  console.log('▸ 14. Manuscript⇄CSV Aligner (Module 13 — L036)');
+  {
+    const col = csvToTableAligner('table1', 'Water reduction %');
+    assert(col === 'avg_water_reduction_pct', `Aligner resolves 'Water reduction %' → ${col}`);
+    const col2 = csvToTableAligner('table1', 'Yield increase %');
+    assert(col2 === 'avg_yield_increase_pct', `Aligner resolves 'Yield increase %' → ${col2}`);
+    let threwHeader = false;
+    try { csvToTableAligner('table1', 'No Such Header XYZ'); } catch { threwHeader = true; }
+    assert(threwHeader, 'Aligner is fail-loud on an unmapped header (L036)');
+    let threwTable = false;
+    try { csvToTableAligner('nonexistent_table', 'Crop'); } catch { threwTable = true; }
+    assert(threwTable, 'Aligner is fail-loud on an unknown table');
   }
   console.log('');
 
