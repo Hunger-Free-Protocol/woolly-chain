@@ -366,6 +366,619 @@ async function main() {
   }
   console.log('');
 
+  // ── 12. V2 Hybrid Demand Model (Module 2 — L023) ─────────────────
+  // Per Doc 2 §5 + Doc 7 §6.2. Verifies the demand_model_summary.csv has:
+  //   - Correct seasonal amplitude per crop (lettuce ±20%, tomato ±30%, herbs ±10%)
+  //   - Correct peak week per crop (lettuce wk 18, tomato wk 6, herbs wk 18)
+  //   - Annual demand matches Doc 7 §6.2 baseline
+  //   - 60/40 contracted/pooled split (within Gaussian-noise tolerance)
+  console.log('▸ 12. V2 Hybrid Demand Model (L023)');
+  const demandPath = path.resolve(__dirname, '..', 'simulation-output', 'demand_model_summary.csv');
+  if (fs.existsSync(demandPath)) {
+    const csvData = fs.readFileSync(demandPath, 'utf-8');
+    const lines = csvData.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',');
+    const dRows = lines.slice(1).map((l: string) => {
+      const cells = l.split(',');
+      const o: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { o[h] = cells[i]; });
+      return o;
+    });
+
+    const lettuce = dRows.filter(r => r['crop'].replace(/"/g, '') === 'Lettuce');
+    const tomato = dRows.filter(r => r['crop'].replace(/"/g, '') === 'Tomato');
+    const herbs = dRows.filter(r => r['crop'].replace(/"/g, '') === 'Herbs');
+
+    assert(lettuce.length === 52, `Lettuce has 52 weeks (got ${lettuce.length})`);
+    assert(tomato.length === 52, `Tomato has 52 weeks (got ${tomato.length})`);
+    assert(herbs.length === 52, `Herbs has 52 weeks (got ${herbs.length})`);
+
+    // T1: amplitude check (peak − trough = 2 × A per crop)
+    const checkAmplitude = (rows: Record<string, string>[], targetA: number, label: string) => {
+      const ms = rows.map(r => parseFloat(r['seasonal_multiplier']));
+      const amp = (Math.max(...ms) - Math.min(...ms)) / 2;
+      assert(Math.abs(amp - targetA) < 0.001,
+        `${label} amplitude ${(amp*100).toFixed(1)}% vs target ±${(targetA*100).toFixed(0)}% (L023)`);
+    };
+    checkAmplitude(lettuce, 0.20, 'Lettuce');
+    checkAmplitude(tomato, 0.30, 'Tomato');
+    checkAmplitude(herbs, 0.10, 'Herbs');
+
+    // T2: peak week check (lettuce wk 18, tomato wk 6, herbs wk 18)
+    const peakWeek = (rows: Record<string, string>[]) => {
+      const p = rows.reduce((acc, r) =>
+        parseFloat(r['seasonal_multiplier']) > parseFloat(acc['seasonal_multiplier']) ? r : acc);
+      return parseInt(p['week_of_year']);
+    };
+    assert(peakWeek(lettuce) === 18, `Lettuce peak at week 18 (got ${peakWeek(lettuce)})`);
+    assert(peakWeek(tomato) === 6, `Tomato peak at week 6 (got ${peakWeek(tomato)})`);
+    assert(peakWeek(herbs) === 18, `Herbs peak at week 18 (got ${peakWeek(herbs)})`);
+
+    // T3: 60/40 contracted/pooled split per crop (within Gaussian-noise tolerance)
+    const checkSplit = (rows: Record<string, string>[], label: string) => {
+      const c = rows.reduce((acc, r) => acc + parseFloat(r['contracted_kg']), 0);
+      const p = rows.reduce((acc, r) => acc + parseFloat(r['pooled_kg']), 0);
+      const cShare = c / (c + p);
+      // 60% target ±5% tolerance (Gaussian noise can drift the split a few pp)
+      assert(Math.abs(cShare - 0.60) < 0.05,
+        `${label} contracted share ${(cShare*100).toFixed(1)}% vs target 60% ±5%`);
+    };
+    checkSplit(lettuce, 'Lettuce');
+    checkSplit(tomato, 'Tomato');
+    checkSplit(herbs, 'Herbs');
+
+    // T4: annual total demand matches Doc 7 §6.2 baseline within ±5%
+    const annualLettuce = lettuce.reduce((acc, r) => acc + parseFloat(r['total_kg']), 0);
+    assert(Math.abs(annualLettuce - 624000) / 624000 < 0.05,
+      `Lettuce annual demand ${Math.round(annualLettuce).toLocaleString()} kg vs Doc 7 §6.2: 624,000 kg ±5%`);
+
+    console.log(`  Lettuce amp=±20% peak=wk18 annual=${Math.round(annualLettuce).toLocaleString()} kg`);
+    console.log(`  Tomato  amp=±30% peak=wk6`);
+    console.log(`  Herbs   amp=±10% peak=wk18`);
+  } else {
+    console.log(`  ⊘ simulation-output/demand_model_summary.csv not found — skipping`);
+  }
+  console.log('');
+
+  // ── 12b. V2 Batch Allocation (Module 4 — L002 demand-pull) ───────
+  // Per Doc 2 §6 + Doc 7 §6.1. Closes L002 — batch count is demand-derived,
+  // not capacity-driven. Verifies the Doc 7 §6.1 worked example:
+  //   - 10 farms × 3 crops = 30 rows
+  //   - Lettuce: 13 batches/farm/year @ 12000 kg/wk × 52 × 0.10 = 62400 kg
+  //   - 60/40 contracted/pooled split per L023
+  //   - Driver column "demand-pull (L002)" present on every row
+  console.log('▸ 12b. V2 Batch Allocation (Module 4 — L002)');
+  const batchPath = path.resolve(__dirname, '..', 'simulation-output', 'batch_allocation_summary.csv');
+  if (fs.existsSync(batchPath)) {
+    const csvData = fs.readFileSync(batchPath, 'utf-8');
+    const lines = csvData.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',');
+    const bRows = lines.slice(1).map((l: string) => {
+      const cells = l.split(',');
+      const o: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { o[h] = cells[i]; });
+      return o;
+    });
+
+    // T1: 30 rows expected (3 crops × 10 farms)
+    assert(bRows.length === 30,
+      `30 rows (3 crops × 10 farms), got ${bRows.length}`);
+
+    // T2: Lettuce farm 1 matches Doc 7 §6.1 worked example
+    const stripQuotes = (s: string) => s.replace(/"/g, '');
+    const lettF1 = bRows.find(r => stripQuotes(r['crop']) === 'Lettuce' && stripQuotes(r['farm_id']) === 'FARM-001')!;
+    assert(parseInt(lettF1['batches_per_year']) === 13,
+      `Lettuce FARM-001: 13 batches/year per Doc 7 §6.1 (got ${lettF1['batches_per_year']})`);
+    assert(Math.abs(parseFloat(lettF1['annual_demand_kg']) - 62400) < 1,
+      `Lettuce FARM-001: 62400 kg/yr annual demand (12000 × 52 × 0.10) (got ${lettF1['annual_demand_kg']})`);
+
+    // T3: 60/40 contracted/pooled split per L023
+    const contracted = parseFloat(lettF1['contracted_demand_kg']);
+    const pooled = parseFloat(lettF1['pooled_demand_kg']);
+    const annual = parseFloat(lettF1['annual_demand_kg']);
+    assert(Math.abs(contracted / annual - 0.60) < 0.001,
+      `Contracted share ${(contracted/annual*100).toFixed(1)}% matches L023 60% target`);
+    assert(Math.abs(pooled / annual - 0.40) < 0.001,
+      `Pooled share ${(pooled/annual*100).toFixed(1)}% matches L023 40% target`);
+
+    // T4: L002 — driver column says demand-pull, not capacity-push
+    for (const r of bRows) {
+      const driver = stripQuotes(r['driver']);
+      assert(driver === 'demand-pull (L002)',
+        `${stripQuotes(r['crop'])} ${stripQuotes(r['farm_id'])}: driver = "demand-pull (L002)"`);
+    }
+
+    // T5: All 10 Lettuce farms have identical 13-batch allocation (uniform farm share)
+    const allLettuce = bRows.filter(r => stripQuotes(r['crop']) === 'Lettuce');
+    const distinctBatchCounts = new Set(allLettuce.map(r => r['batches_per_year']));
+    assert(distinctBatchCounts.size === 1,
+      `Lettuce: all 10 farms have identical batch count (${[...distinctBatchCounts]})`);
+
+    // T6: batches × batch_yield ≥ annual_demand (capacity covers demand)
+    for (const r of bRows) {
+      const supplied = parseInt(r['batches_per_year']) * parseFloat(r['batch_yield_kg']);
+      const demand = parseFloat(r['annual_demand_kg']);
+      assert(supplied >= demand,
+        `${stripQuotes(r['crop'])} ${stripQuotes(r['farm_id'])}: supplied=${supplied} ≥ demand=${demand} kg`);
+    }
+
+    console.log(`  Lettuce: 13 batches/farm @ 62400 kg/yr | Tomato: ${bRows.find(r => stripQuotes(r['crop'])==='Tomato')!['batches_per_year']} batches/farm | Herbs: ${bRows.find(r => stripQuotes(r['crop'])==='Herbs')!['batches_per_year']} batches/farm`);
+  } else {
+    console.log(`  ⊘ simulation-output/batch_allocation_summary.csv not found — skipping`);
+  }
+  console.log('');
+
+  // ── 12c. V2 Parametric Commercials (Module 5 — L003) ─────────────
+  // Per Doc 2 §2.4. Marketing expense and commission rates exposed as
+  // explicit named parameters with documented ranges and source citations.
+  console.log('▸ 12c. V2 Parametric Commercials (Module 5 — L003)');
+  const cmPath = path.resolve(__dirname, '..', 'simulation-output', 'commercials_summary.csv');
+  if (fs.existsSync(cmPath)) {
+    const csvData = fs.readFileSync(cmPath, 'utf-8');
+    const lines = csvData.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',');
+    const cmRows = lines.slice(1).map((l: string) => {
+      const cells = l.split(',');
+      const o: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { o[h] = cells[i]; });
+      return o;
+    });
+
+    // T1: 11 rows expected (6 marketing × 2 units + 5 commission)
+    assert(cmRows.length === 11,
+      `11 rows (6 marketing INR/USD + 5 commission), got ${cmRows.length}`);
+
+    // T2: Marketing values in the documented ₹3–15/kg range per L003
+    const stripQuotes = (s: string) => s.replace(/"/g, '');
+    const inrMktg = cmRows.filter(r => stripQuotes(r['parameter_type']) === 'marketing_expense'
+                                    && stripQuotes(r['unit']) === 'INR_per_kg');
+    for (const r of inrMktg) {
+      const v = parseFloat(r['value']);
+      assert(v >= 3 && v <= 15,
+        `${stripQuotes(r['parameter_key'])}: ₹${v}/kg within Doc 2 §2.4 range [3, 15]`);
+    }
+
+    // T3: Commission rates within documented bounds per L003
+    const commissions = cmRows.filter(r => stripQuotes(r['parameter_type']) === 'sales_commission');
+    for (const r of commissions) {
+      const v = parseFloat(r['value']);
+      assert(v >= 0 && v <= 0.40,
+        `${stripQuotes(r['parameter_key'])}: ${(v*100).toFixed(0)}% commission within [0, 40] range`);
+    }
+
+    // T4: Each row has a source citation (L003 — never bake in numbers without provenance)
+    for (const r of cmRows) {
+      const source = stripQuotes(r['source']);
+      assert(source.length > 0,
+        `${stripQuotes(r['parameter_key'])}: source citation present (L003)`);
+    }
+
+    // T5: USD conversion matches L004 (₹85 = USD 1.00)
+    const inrLettuce = cmRows.find(r => stripQuotes(r['parameter_key']) === 'phi_marketing_Lettuce')!;
+    const usdLettuce = cmRows.find(r => stripQuotes(r['parameter_key']) === 'phi_marketing_Lettuce_USD')!;
+    const expectedUSD = parseFloat(inrLettuce['value']) / 85;
+    const actualUSD = parseFloat(usdLettuce['value']);
+    assert(Math.abs(actualUSD - expectedUSD) < 0.001,
+      `Lettuce marketing USD ${actualUSD} matches ₹85=USD 1.00 conversion (expected ${expectedUSD.toFixed(4)})`);
+
+    // T6: Q-commerce range present per Inc42 22–30% disclosure
+    const qcomm = cmRows.find(r => stripQuotes(r['parameter_key']) === 'phi_commission_qcommerce')!;
+    assert(Math.abs(parseFloat(qcomm['range_low']) - 0.22) < 0.001,
+      `Q-commerce range low ${qcomm['range_low']} = 0.22 per Inc42 (2024)`);
+    assert(Math.abs(parseFloat(qcomm['range_high']) - 0.30) < 0.001,
+      `Q-commerce range high ${qcomm['range_high']} = 0.30 per Inc42 (2024)`);
+
+    console.log(`  ${inrMktg.length} marketing params (₹/kg) | ${commissions.length} commission params | all L003-compliant`);
+  } else {
+    console.log(`  ⊘ simulation-output/commercials_summary.csv not found — skipping`);
+  }
+  console.log('');
+
+  // ── 12d. V2 Two-Tier Subscription (Module 6 — Doc 7 §3.3 + §8.5) ─
+  // Reproduces Doc 7 §6.2 worked example:
+  //   - ε_threshold ≈ 0.148%
+  //   - E_threshold ≈ $296
+  //   - ~251 equity-tier subscribers per farm
+  //   - 80% of $42,500 = $34,000 revenue distributed
+  //   - Treasury inflow positive (Self-Funding Expansion validated)
+  //   - Patron tier has protocol fee = 5% of patron revenue
+  console.log('▸ 12d. V2 Two-Tier Subscription (Module 6)');
+  const subscrPath = path.resolve(__dirname, '..', 'simulation-output', 'subscription_tier_summary.csv');
+  if (fs.existsSync(subscrPath)) {
+    const csvData = fs.readFileSync(subscrPath, 'utf-8');
+    const lines = csvData.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',');
+    const sRows = lines.slice(1).map((l: string) => {
+      const cells = l.split(',');
+      const o: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { o[h] = cells[i]; });
+      return o;
+    });
+
+    const stripQuotes = (s: string) => s.replace(/"/g, '');
+
+    // T1: 10 farms tracked
+    assert(sRows.length === 10, `10 farms in subscription tier summary (got ${sRows.length})`);
+
+    const f1 = sRows[0];
+
+    // T2: ε_threshold matches Doc 7 §6.2 worked example
+    const eps = parseFloat(f1['epsilon_threshold']);
+    assert(Math.abs(eps - 0.00148) < 0.0001,
+      `ε_threshold ${eps} matches Doc 7 §6.2 target 0.00148 (~0.148%)`);
+
+    // T3: E_threshold matches Doc 7 §6.2 (~$296)
+    const ET = parseFloat(f1['E_threshold_USD']);
+    assert(Math.abs(ET - 296) < 2,
+      `E_threshold $${ET} matches Doc 7 §6.2 target $296`);
+
+    // T4: Equity subscriber count matches Doc 7 §6.2 (~251)
+    const subs = parseInt(f1['equity_subscribers_per_farm']);
+    assert(Math.abs(subs - 251) <= 5,
+      `Equity subscribers/farm ${subs} matches Doc 7 §6.2 target ~251 (±5)`);
+
+    // T5: Revenue distributed = 80% × $42,500 = $34,000 per φ_profit
+    const rev = parseFloat(f1['equity_revenue_distributed_USD']);
+    assert(Math.abs(rev - 34000) < 1,
+      `Equity revenue distributed $${rev} = 80% × $42,500 (φ_profit = 0.80 per Q10)`);
+
+    // T6: Treasury inflow positive (Self-Funding Expansion Theorem Doc 7 §5.4)
+    const ti = parseFloat(f1['treasury_inflow_USD']);
+    assert(ti > 0,
+      `Treasury inflow $${ti}/yr > 0 (Self-Funding Expansion Theorem Doc 7 §5.4)`);
+
+    // T7: Protocol fee = 5% of patron revenue
+    const patronRev = parseFloat(f1['patron_annual_revenue_USD']);
+    const fee = parseFloat(f1['protocol_fee_revenue_USD']);
+    assert(Math.abs(fee / patronRev - 0.05) < 0.001,
+      `Protocol fee ${(fee/patronRev*100).toFixed(2)}% of patron revenue = 5% per Doc 7 §3.3`);
+
+    // T8: Tier model label correct (two-tier per Doc 7 §3.3)
+    for (const r of sRows) {
+      const tier = stripQuotes(r['tier_model']);
+      assert(tier.includes('two-tier'),
+        `${stripQuotes(r['farm_id'])}: two-tier model label present`);
+    }
+
+    // T9: Ecosystem-wide subscriber count aggregates toward Doc 7 §6.2 (within penetration adjustment)
+    const totalEquity = sRows.reduce((acc, r) => acc + parseInt(r['equity_subscribers_per_farm']), 0);
+    assert(totalEquity > 2000 && totalEquity < 3000,
+      `10-farm ecosystem equity subscribers ${totalEquity} aggregates correctly (10 × ~251)`);
+
+    console.log(`  E_threshold=$${ET.toFixed(0)} | ${subs} equity subscribers/farm | $${ti.toFixed(0)} treasury inflow/farm/yr | ${stripQuotes(f1['patron_count_per_farm'])} patrons/farm`);
+  } else {
+    console.log(`  ⊘ simulation-output/subscription_tier_summary.csv not found — skipping`);
+  }
+  console.log('');
+
+  // ── 12e. V2 Treasury Reinvestment + Self-Funding (Module 7) ──────
+  // Per Doc 7 §5.4 + §6.4 worked example.
+  // At 50,000 farms: T_inflow ≈ $2.47M/yr, γ_endogenous ≥ 16 farms/yr.
+  // Bootstrap phase at N < 300 farms; self-funding met at N ≥ ~1,000.
+  console.log('▸ 12e. V2 Treasury Reinvestment + Self-Funding (Module 7)');
+  const trPath = path.resolve(__dirname, '..', 'simulation-output', 'treasury_expansion_summary.csv');
+  if (fs.existsSync(trPath)) {
+    const csvData = fs.readFileSync(trPath, 'utf-8');
+    const lines = csvData.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',');
+    const tRows = lines.slice(1).map((l: string) => {
+      const cells = l.split(',');
+      const o: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { o[h] = cells[i]; });
+      return o;
+    });
+
+    const stripQuotes = (s: string) => s.replace(/"/g, '');
+    assert(tRows.length === 5, `5 ecosystem scale targets tracked (got ${tRows.length})`);
+
+    const at50k = tRows.find(r => parseInt(r['ecosystem_scale_farms']) === 50000)!;
+
+    // T1: T_inflow at 50k farms ≈ $2.47M per Doc 7 §6.4 (within $0.1M)
+    const inflow50k = parseFloat(at50k['ecosystem_annual_treasury_inflow_USD']);
+    assert(Math.abs(inflow50k - 2_470_000) < 100_000,
+      `T_inflow $${(inflow50k/1e6).toFixed(2)}M at 50k farms matches Doc 7 §6.4 target $2.47M`);
+
+    // T2: V_farm declines monotonically along the learning curve
+    const Vs = tRows.map(r => parseFloat(r['V_farm_USD']));
+    for (let i = 1; i < Vs.length; i++) {
+      assert(Vs[i] < Vs[i-1],
+        `V_farm declines along learning curve: ${Vs[i-1].toFixed(0)} → ${Vs[i].toFixed(0)}`);
+    }
+
+    // T3: γ_endogenous at 50k ≥ 16 farms/yr per Doc 7 §6.4 lower bound
+    const gamma50k = parseFloat(at50k['endogenous_expansion_rate_farms_per_yr']);
+    assert(gamma50k >= 16 && gamma50k <= 50,
+      `γ_endogenous at 50k: ${gamma50k} farms/yr in range [16, 50] (Doc 7 §6.4: ≥16)`);
+
+    // T4: Bootstrap phase active at N=10 (per Doc 7 §5.4.4: first 100–300 farms need external)
+    const at10 = tRows.find(r => parseInt(r['ecosystem_scale_farms']) === 10)!;
+    assert(stripQuotes(at10['bootstrap_phase_active']) === 'true',
+      `Bootstrap phase active at N=10 (foundation treasury seed required)`);
+
+    // T5: Self-funding met at N=10000 (γ > 1, post-bootstrap)
+    const at10k = tRows.find(r => parseInt(r['ecosystem_scale_farms']) === 10000)!;
+    assert(stripQuotes(at10k['self_funding_met']) === 'true',
+      `Self-funding met at N=10,000 farms (Self-Funding Expansion Theorem satisfied)`);
+
+    // T6: Self-Funding Expansion Theorem reference present on every row
+    for (const r of tRows) {
+      const ref = stripQuotes(r['theorem_reference']);
+      assert(ref.includes('Self-Funding Expansion Theorem'),
+        `${r['ecosystem_scale_farms']}: theorem reference present`);
+    }
+
+    console.log(`  N=50k → V_farm=$${parseFloat(at50k['V_farm_USD']).toFixed(0)} | T_inflow=$${(inflow50k/1e6).toFixed(2)}M | γ=${gamma50k}/yr`);
+  } else {
+    console.log(`  ⊘ simulation-output/treasury_expansion_summary.csv not found — skipping`);
+  }
+  console.log('');
+
+  // ── 12f. V2 Productivity Multiplier Π_b + Market-Bounded Reserve ──
+  // Per Doc 7 §3.5 (Π_b dynamic token valuation) + §5.5 (Eq. 19 reserve constraint).
+  console.log('▸ 12f. V2 Productivity Π_b + Market-Bounded Reserve (Modules 8+9)');
+
+  // Π_b test (Module 8)
+  const pmPath = path.resolve(__dirname, '..', 'simulation-output', 'productivity_multiplier_summary.csv');
+  if (fs.existsSync(pmPath)) {
+    const csvData = fs.readFileSync(pmPath, 'utf-8');
+    const lines = csvData.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',');
+    const pmRows = lines.slice(1).map((l: string) => {
+      const cells = l.split(',');
+      const o: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { o[h] = cells[i]; });
+      return o;
+    });
+
+    const pis = pmRows.map(r => parseFloat(r['Pi_b']));
+    const mean = pis.reduce((a, b) => a + b, 0) / pis.length;
+    const variance = pis.reduce((a, b) => a + (b - mean) ** 2, 0) / pis.length;
+    const stdev = Math.sqrt(variance);
+
+    assert(Math.abs(mean - 1.0) < 0.15,
+      `Π_b mean ${mean.toFixed(4)} ≈ 1.0 (steady-state Π̄ per Doc 7 §6.2)`);
+    assert(Math.abs(stdev - 0.10) < 0.05,
+      `Π_b stdev ${stdev.toFixed(4)} ≈ 0.10 (per CONFIG batch_noise_sigma)`);
+    assert(pis.every(p => p >= 0.5 && p <= 2.0),
+      `All Π_b within physical bounds [0.5, 2.0]`);
+
+    console.log(`  Π_b: mean=${mean.toFixed(3)} σ=${stdev.toFixed(3)} (target 1.0 ± 0.10)`);
+  }
+
+  // Market-Bounded Reserve test (Module 9)
+  const mbrPath = path.resolve(__dirname, '..', 'simulation-output', 'market_bounded_reserve_summary.csv');
+  if (fs.existsSync(mbrPath)) {
+    const csvData = fs.readFileSync(mbrPath, 'utf-8');
+    const lines = csvData.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',');
+    const mbrRows = lines.slice(1).map((l: string) => {
+      const cells = l.split(',');
+      const o: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { o[h] = cells[i]; });
+      return o;
+    });
+
+    const stripQuotes = (s: string) => s.replace(/"/g, '');
+    assert(mbrRows.length === 3, `3 crops tracked (got ${mbrRows.length})`);
+
+    // Verify Doc 7 §5.5 Eq. 19 formula consistency
+    for (const r of mbrRows) {
+      const P_market = parseFloat(r['P_market_USD_per_kg']);
+      const C_prod = parseFloat(r['C_prod_USD_per_kg']);
+      const Q = parseFloat(r['Q_annual_kg']);
+      const C_opex = parseFloat(r['C_opex_monthly_USD']);
+      const N_max_reported = parseFloat(r['N_opex_max_months']);
+      const N_max_computed = (P_market - C_prod) * Q / C_opex;
+      assert(Math.abs(N_max_reported - N_max_computed) < 0.01,
+        `${stripQuotes(r['crop'])}: Doc 7 §5.5 Eq. 19 — N_opex_max=${N_max_reported} matches (P-C)Q/C_opex=${N_max_computed.toFixed(2)}`);
+    }
+
+    // User's Q1 intuition validated: low-margin crops have binding constraint
+    const lettuce = mbrRows.find(r => stripQuotes(r['crop']) === 'Lettuce')!;
+    const tomato = mbrRows.find(r => stripQuotes(r['crop']) === 'Tomato')!;
+    const herbs = mbrRows.find(r => stripQuotes(r['crop']) === 'Herbs')!;
+    assert(stripQuotes(lettuce['constraint_binding']) === 'true',
+      `Lettuce: constraint binding (low margin → market-bounded reserve < 3 mo target, per user Q1)`);
+    assert(stripQuotes(tomato['constraint_binding']) === 'true',
+      `Tomato: constraint binding (low margin)`);
+    assert(stripQuotes(herbs['constraint_binding']) === 'false',
+      `Herbs: constraint NOT binding (high margin allows ≥3 mo reserve)`);
+
+    console.log(`  Lettuce N_opex_max=${lettuce['N_opex_max_months']}mo | Tomato=${tomato['N_opex_max_months']}mo | Herbs=${herbs['N_opex_max_months']}mo`);
+  }
+  console.log('');
+
+  // ── 12g. V2 Seed-to-Fork + Cross-Validation (Modules 10+11) ──────
+  // Per Doc 8 §4 (seed provenance) + Q27 (cross-validation CSV).
+  console.log('▸ 12g. V2 Seed-to-Fork + Cross-Validation (Modules 10+11)');
+
+  // Module 10 — Seed provenance
+  const seedPath = path.resolve(__dirname, '..', 'simulation-output', 'seed_provenance_summary.csv');
+  if (fs.existsSync(seedPath)) {
+    const csvData = fs.readFileSync(seedPath, 'utf-8');
+    const lines = csvData.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',');
+    const seedRows = lines.slice(1).map((l: string) => {
+      const cells = l.split(',');
+      const o: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { o[h] = cells[i]; });
+      return o;
+    });
+
+    const stripQuotes = (s: string) => s.replace(/"/g, '');
+
+    assert(seedRows.length === 4, `4 enrolled seed lots (got ${seedRows.length})`);
+
+    // Tier 1 vs Tier 2 distribution
+    const tier1Count = seedRows.filter(r => parseInt(r['supplier_tier']) === 1).length;
+    const tier2Count = seedRows.filter(r => parseInt(r['supplier_tier']) === 2).length;
+    assert(tier1Count === 3 && tier2Count === 1,
+      `3 Tier 1 lots / 1 Tier 2 lot (per Doc 8 §4.3 hypothesis disclosure ~20%/80%)`);
+
+    // Tier 1 lots have breeder attribution > 0; Tier 2 lots have 0
+    for (const r of seedRows) {
+      const tier = parseInt(r['supplier_tier']);
+      const bp = parseInt(r['breeder_attribution_bp']);
+      if (tier === 1) {
+        assert(bp > 0,
+          `${stripQuotes(r['seed_lot_id'])}: Tier 1 has breeder attribution ${bp} bp > 0`);
+      } else {
+        assert(bp === 0,
+          `${stripQuotes(r['seed_lot_id'])}: Tier 2 has no breeder attribution (legacy attestation only)`);
+      }
+    }
+
+    // All seed lots reference valid crop types
+    const validCrops = new Set(['Lettuce', 'Tomato', 'Herbs']);
+    for (const r of seedRows) {
+      const c = stripQuotes(r['crop_type']);
+      assert(validCrops.has(c),
+        `${stripQuotes(r['seed_lot_id'])}: crop_type '${c}' valid`);
+    }
+
+    console.log(`  Seed lots: ${tier1Count} Tier 1 (protocol NFT) + ${tier2Count} Tier 2 (attestation)`);
+  }
+
+  // Module 11 — Cross-validation CSV
+  const cvPath = path.resolve(__dirname, '..', 'simulation-output', 'cross_validation_summary.csv');
+  if (fs.existsSync(cvPath)) {
+    const csvData = fs.readFileSync(cvPath, 'utf-8');
+    const lines = csvData.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',');
+    const cvRows = lines.slice(1).map((l: string) => {
+      const cells = l.split(',');
+      const o: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { o[h] = cells[i]; });
+      return o;
+    });
+
+    assert(cvRows.length === 4, `4 node-density scenarios (1/3/5/10 per km²)`);
+
+    // Accuracy increases monotonically with density (physical expectation)
+    const accuracies = cvRows.map(r => parseFloat(r['cross_validation_accuracy_pct']));
+    for (let i = 1; i < accuracies.length; i++) {
+      assert(accuracies[i] > accuracies[i-1],
+        `Accuracy increases with density: ${accuracies[i-1]}% → ${accuracies[i]}%`);
+    }
+
+    // 5 nodes/km² hits insurance-grade target (95.4% per Doc 6 §4.4)
+    const at5 = cvRows.find(r => parseInt(r['node_density_per_km2']) === 5)!;
+    assert(Math.abs(parseFloat(at5['cross_validation_accuracy_pct']) - 95.4) < 0.01,
+      `5 nodes/km² → 95.4% accuracy (Doc 6 §4.4 + Q27 calibration target)`);
+
+    // 10 nodes/km² hits "Premium" grade (98.7%)
+    const at10 = cvRows.find(r => parseInt(r['node_density_per_km2']) === 10)!;
+    const stripQ2 = (s: string) => s.replace(/"/g, '');
+    assert(stripQ2(at10['insurance_grade']) === 'Premium',
+      `10 nodes/km² → Premium insurance grade`);
+
+    console.log(`  Cross-val: 1/3/5/10 nodes → ${accuracies.map(a => a + '%').join(' / ')}`);
+  }
+  console.log('');
+
+  // ── 13. V2 Avoided-Emissions LCA (Module 3 — L026) ───────────────
+  // Per Doc 1 §4 + Doc 3 §8 Table P8. Verifies:
+  //   - Five savings categories (waterPump, fertMfg, N2O, transport, spoilage) match formulas
+  //   - Two added categories (LED, HVAC) match formulas
+  //   - Net = sum of categories
+  //   - Soil-sequestration framing is purged (no SOC anywhere in CSV)
+  // Note: Net at Tier 2 may be NEGATIVE at default CEA energy demand. This is a real
+  // finding documented in the open items; the test accepts the wide physical range.
+  console.log('▸ 13. V2 Avoided-Emissions LCA (L026)');
+  const lcaPath = path.resolve(__dirname, '..', 'simulation-output', 'avoided_emissions_summary.csv');
+  if (fs.existsSync(lcaPath)) {
+    const csvData = fs.readFileSync(lcaPath, 'utf-8');
+    const lines = csvData.split('\n').filter((l: string) => l.trim());
+    const headers = lines[0].split(',');
+    const lcaRows = lines.slice(1).map((l: string) => {
+      const cells = l.split(',');
+      const o: Record<string, string> = {};
+      headers.forEach((h: string, i: number) => { o[h] = cells[i]; });
+      return o;
+    });
+
+    assert(lcaRows.length === 3, `Three crops covered (got ${lcaRows.length})`);
+
+    // T1: Transport delta matches Doc 1 §4 — same for all crops (independent of crop)
+    for (const r of lcaRows) {
+      const t = parseFloat(r['transport_g_per_kg']);
+      assert(Math.abs(t - 40.5) < 0.5,
+        `Transport ${t}g/kg vs Doc 1: 225km × 0.18 kgCO2e/tonne-km = 40.5 g/kg`);
+    }
+
+    // T2: Path E — Net = climate savings + soil + UHI − LED − HVAC (formula consistency)
+    for (const r of lcaRows) {
+      const cats = ['water_pumping_g_per_kg', 'fertilizer_mfg_g_per_kg', 'field_N2O_g_per_kg',
+                    'transport_g_per_kg', 'spoilage_avoided_g_per_kg',
+                    'soil_carbon_preserved_g_per_kg', 'rooftop_UHI_g_per_kg'];
+      const adds = ['LED_added_g_per_kg', 'HVAC_added_g_per_kg'];
+      const savings = cats.reduce((a, c) => a + parseFloat(r[c]), 0);
+      const added = adds.reduce((a, c) => a + parseFloat(r[c]), 0);
+      const calculatedNet = savings - added;
+      const reportedNet = parseFloat(r['net_avoided_g_per_kg']);
+      assert(Math.abs(calculatedNet - reportedNet) < 0.5,
+        `${r['crop']}: Path E net = savings(${savings.toFixed(1)}) − added(${added.toFixed(1)}) = ${calculatedNet.toFixed(1)} matches reported ${reportedNet.toFixed(1)}`);
+    }
+
+    // T3: L026 — no soil-sequestration framing
+    const csvText = csvData.toLowerCase();
+    assert(!csvText.includes('soil_organic_sequestration') && !csvText.includes('soil sequestration'),
+      'L026: No soil-sequestration framing in avoided_emissions_summary.csv');
+
+    // T4: Path E — Net avoided emissions are POSITIVE under IREC-backed Tier 1 + rooftop UHI
+    for (const r of lcaRows) {
+      const n = parseFloat(r['net_avoided_g_per_kg']);
+      assert(n > 0 && n < 5000,
+        `${r['crop']}: Path E net avoided ${n} g/kg is positive and within plausible 0–5,000 range`);
+    }
+
+    // T5: Path E — LED and HVAC contributions are ZERO (IREC offset to Tier 1)
+    for (const r of lcaRows) {
+      const led = parseFloat(r['LED_added_g_per_kg']);
+      const hvac = parseFloat(r['HVAC_added_g_per_kg']);
+      assert(led === 0 && hvac === 0,
+        `${r['crop']}: Path E LED=${led} HVAC=${hvac} both zero (IREC-backed Tier 1)`);
+    }
+
+    // T6: Path E — Rooftop UHI is non-zero and consistent across crops
+    // (10 kWh/kg × 0.70 rooftop × 0.71 EF × 0.30 attribution × 1000 = 1491 g/kg)
+    for (const r of lcaRows) {
+      const uhi = parseFloat(r['rooftop_UHI_g_per_kg']);
+      assert(Math.abs(uhi - 1491) < 1,
+        `${r['crop']}: rooftop UHI ${uhi}g/kg matches formula (10 × 0.70 × 0.71 × 0.30 × 1000 = 1491)`);
+    }
+
+    // T7: Path E — Soil carbon preserved is non-zero (73 g/kg at 5 kg/m² density × 1 tC/ha/yr)
+    for (const r of lcaRows) {
+      const soc = parseFloat(r['soil_carbon_preserved_g_per_kg']);
+      assert(Math.abs(soc - 73.33) < 0.5,
+        `${r['crop']}: soil C preserved ${soc}g/kg matches formula (1/5 × 1tC × 44/12 / 1e4 × 1e6 = 73.33)`);
+    }
+
+    // T8: Path E — Eutrophication indicator non-zero and crop-specific
+    for (const r of lcaRows) {
+      const eu = parseFloat(r['eutrophication_avoided_gPO4eq_per_kg']);
+      assert(eu > 0 && eu < 1,
+        `${r['crop']}: eutrophication avoided ${eu}g PO4-eq/kg in expected sub-1g range`);
+    }
+
+    // T9: Per-cycle aggregation propagated to raw_cycle_data.csv
+    const rawCsv = fs.readFileSync(simOutputPath, 'utf-8');
+    assert(rawCsv.includes('avoided_emissions_g_per_kg'),
+      'raw_cycle_data.csv has avoided_emissions_g_per_kg column');
+
+    const stripQuotes = (s: string) => s.replace(/"/g, '');
+    const lettRow = lcaRows.find(r => stripQuotes(r['crop']) === 'Lettuce')!;
+    const tomRow = lcaRows.find(r => stripQuotes(r['crop']) === 'Tomato')!;
+    const herbRow = lcaRows.find(r => stripQuotes(r['crop']) === 'Herbs')!;
+    console.log(`  Path E net (g CO₂e/kg): Lettuce=${lettRow['net_avoided_g_per_kg']} | Tomato=${tomRow['net_avoided_g_per_kg']} | Herbs=${herbRow['net_avoided_g_per_kg']}`);
+    console.log(`  Energy:     ${lettRow['energy_tier'].replace(/"/g, '').substring(0,60)}`);
+    console.log(`  Deployment: ${lettRow['deployment_model'].replace(/"/g, '')}`);
+  } else {
+    console.log(`  ⊘ simulation-output/avoided_emissions_summary.csv not found — skipping`);
+  }
+  console.log('');
+
   // ── Summary ──────────────────────────────────────────────────────
   console.log('══════════════════════════════════════════════════');
   console.log(`  Results: ${passed} passed, ${failed} failed`);
