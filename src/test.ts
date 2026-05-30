@@ -932,8 +932,8 @@ async function main() {
     // T1: Transport delta matches Doc 1 §4 — same for all crops (independent of crop)
     for (const r of lcaRows) {
       const t = parseFloat(r['transport_g_per_kg']);
-      assert(Math.abs(t - 40.5) < 0.5,
-        `Transport ${t}g/kg vs Doc 1: 225km × 0.18 kgCO2e/tonne-km = 40.5 g/kg`);
+      assert(Math.abs(t - 13.5) < 0.5,
+        `Transport ${t}g/kg vs Q-B4: 75km delta × 0.18 kgCO2e/tonne-km = 13.5 g/kg`);
     }
 
     // T2: Path E — Net = climate savings + soil + UHI − LED − HVAC (formula consistency)

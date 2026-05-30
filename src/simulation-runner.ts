@@ -93,8 +93,11 @@ const CONFIG = {
     // PATH E — IREC-backed Tier 1 (market-based Scope 2 per GHG Protocol)
     renewableShareFraction: 1.0,          // 100% via Indian Renewable Energy Certificates
     renewableMechanism: "IREC purchase + Bengaluru open-access solar PPA matching",
-    // Baseline counterfactual (Q2: 200–300 km refrigerated truck import)
-    baselineTransportKm: 250,             // Mid-point Hosur/Ooty → Bengaluru NCR
+    // Baseline counterfactual (Q-B4: volume-weighted Bengaluru peri-urban produce-shed,
+    // 75–150 km band — Kolar tomato ~70km, Anekal/Hoskote greens ~25–40km, Mandya–Mysore
+    // tail ~100–150km. Out-of-state long-haul (Nashik/Pune ~840–1060km) carries onions,
+    // outside the modeled basket, so excluded. Replaces the earlier 200–300 km assumption.)
+    baselineTransportKm: 100,             // vol-weighted point within the 75–150 km shed
     woollyTransportKm: 25,                // Local peri-urban delivery
     // Fertilizer baselines per kg produce (Resh 2022 + Sambo et al. 2019)
     N_baseline_kg_per_kg_produce: {
