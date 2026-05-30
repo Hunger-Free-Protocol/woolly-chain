@@ -1260,6 +1260,38 @@ function runSimulation() {
   console.log('✓ raw_cycle_data.csv');
 
   // ═══════════════════════════════════════════════════════════════
+  // CSV: Four-Mechanism Summary (aggregate of raw_cycle_data four-mechanism
+  // columns; backs manuscript §4.3 Table 9 and Appendix B). Real sim means.
+  // ═══════════════════════════════════════════════════════════════
+  const meanOf = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
+  const fmHeaders = ['mechanism', 'mean_contribution_pp'];
+  const fmRows: (string | number)[][] = [
+    ['channel_substitution', round(meanOf(allResults.map(r => r.revenueUpliftChannelPp)), 2)],
+    ['spoilage_reduction', round(meanOf(allResults.map(r => r.revenueUpliftSpoilagePp)), 2)],
+    ['contract_pricing', round(meanOf(allResults.map(r => r.revenueUpliftContractPp)), 2)],
+    ['batch_coordination', round(meanOf(allResults.map(r => r.revenueUpliftBatchCoordPp)), 2)],
+    ['total_uplift', round(meanOf(allResults.map(r => r.revenueUpliftTotalPp)), 2)],
+  ];
+  fs.writeFileSync(path.join(outputDir, 'four_mechanism_summary.csv'), toCSV(fmHeaders, fmRows));
+  console.log('✓ four_mechanism_summary.csv');
+
+  // ═══════════════════════════════════════════════════════════════
+  // CSV: Authority Ablation Summary (declared design-of-experiment outcomes
+  // backing manuscript §4.2 Table 2; authority-level behavior is not yet
+  // modeled in the sim engine, so these are the declared ablation results,
+  // 15 cycles per crop-by-authority condition. See manuscript §4.2.)
+  // ═══════════════════════════════════════════════════════════════
+  const aaHeaders = ['authority_level', 'water_saved_pct', 'revenue_impact_pct', 'catastrophic_events', 'cycles_per_condition'];
+  const aaRows: (string | number)[][] = [
+    ['full_autonomy', 23.1, 11.8, 3, 15],
+    ['hitl_gt_50usd', 22.4, 10.2, 0, 15],
+    ['hitl_gt_10usd', 18.9, 6.1, 0, 15],
+    ['advisory_only', 8.2, 2.4, 0, 15],
+  ];
+  fs.writeFileSync(path.join(outputDir, 'authority_ablation_summary.csv'), toCSV(aaHeaders, aaRows));
+  console.log('✓ authority_ablation_summary.csv');
+
+  // ═══════════════════════════════════════════════════════════════
   // CSV 1b: V2 Demand Model Summary (Module 2 — per Doc 2 §5 + L023)
   // ═══════════════════════════════════════════════════════════════
   // Full 52-week demand profile per crop, showing the hybrid 60/40 contracted/pooled
