@@ -259,10 +259,39 @@ async function main() {
   assert(laborResult.wageRate > 0, `Labor path: wage rate ${laborResult.wageRate}`);
   assert(laborResult.equityAccrualRate > 0, 'Labor path: equity accrual active');
 
+  // Path 4: Marketing contribution (L045 — verified demand generation)
+  const marketer1 = generateAddress();
+  const innovator1 = generateAddress();
+  chain.state.createAccount(marketer1);
+  chain.state.createAccount(innovator1);
+  const marketingResult = contribution.registerMarketingContribution(chain.state, marketer1, 'FARM-001', 1500, 5);
+  assert(marketingResult.qualified === true, 'Marketing path: qualified at 1500kg verified demand');
+  assert(marketingResult.foodAllocation > 0, `Marketing food: ${marketingResult.foodAllocation} kg/month`);
+  assert(marketingResult.commissionRate > 0 && marketingResult.commissionRate < 1, `Marketing commission parametric: ${marketingResult.commissionRate}`);
+  // Below-threshold marketing does NOT qualify
+  const marketingBelow = contribution.registerMarketingContribution(chain.state, generateAddress(), 'FARM-002', 500);
+  assert(marketingBelow.qualified === false && marketingBelow.foodAllocation === 0, 'Marketing below 1000kg threshold not food-eligible');
+
+  // Path 5: Innovation contribution (L045 — IP NFT + ERC-2981 royalty)
+  const innovationResult = contribution.registerInnovationContribution(chain.state, innovator1, 'FARM-001', 'IPNFT-001', 0.05, true);
+  assert(innovationResult.accepted === true, 'Innovation path: IP NFT accepted');
+  assert(innovationResult.foodAllocation > 0, `Innovation food: ${innovationResult.foodAllocation} kg/month`);
+  assert(innovationResult.royaltyRate > 0 && innovationResult.royaltyRate < 1, `Innovation royalty parametric (ERC-2981): ${innovationResult.royaltyRate}`);
+
+  // Five contribution paths are registered (L045)
+  assert(ContributionContract.PATHS.length === 5, `Five contribution paths defined: ${ContributionContract.PATHS.join('/')}`);
+
   // Check food eligibility
   const capitalEligibility = contribution.checkFoodEligibility(chain.state, investor1);
   assert(capitalEligibility.eligible === true, 'Capital investor is food-eligible');
   assert(capitalEligibility.path === 'capital', 'Identified as capital path');
+  const marketingEligibility = contribution.checkFoodEligibility(chain.state, marketer1);
+  assert(marketingEligibility.eligible === true && marketingEligibility.path === 'marketing', 'Marketer is food-eligible via marketing path');
+  const innovationEligibility = contribution.checkFoodEligibility(chain.state, innovator1);
+  assert(innovationEligibility.eligible === true && innovationEligibility.path === 'innovation', 'Innovator is food-eligible via innovation path');
+  // getFarmContributions returns all five path arrays
+  const farmContribs = contribution.getFarmContributions('FARM-001');
+  assert(farmContribs.marketing.length === 1 && farmContribs.innovation.length === 1, 'Farm contributions include marketing + innovation arrays');
   console.log('');
 
   // ── 8. Chain Persistence ─────────────────────────────────────────

@@ -1,14 +1,24 @@
 /**
  * Woolly Chain - Contribution-Based Food Access Contract
- * Three-path system for earning free food through capital, land, or labor
+ * Five-path system for earning food access (L045): capital, land, labor,
+ * marketing, and innovation. Capital/Land/Labor are the original three;
+ * Marketing and Innovation were added in Module 12 to match Doc 7's V2
+ * stakeholder model.
  */
 
 import { v4 as uuidv4 } from 'uuid';
 import { ContractState, ContractType } from '../core/types';
 import { WorldState } from '../core/state';
 
+export type ContributionPathName =
+  | 'capital'
+  | 'land'
+  | 'labor'
+  | 'marketing'
+  | 'innovation';
+
 export interface ContributionPath {
-  path: 'capital' | 'land' | 'labor';
+  path: ContributionPathName;
   address: string;
   farmId: string;
   startedAt: number;
@@ -38,18 +48,49 @@ export interface LaborContribution extends ContributionPath {
   totalEquityEarned: number;
 }
 
+export interface MarketingContribution extends ContributionPath {
+  path: 'marketing';
+  verifiedDemandKg: number; // cumulative verified produce demand generated
+  contentPieces: number; // verified content/marketing assets produced
+  commissionRate: number; // phi_commission,k (parametric, L003) — fraction
+  foodAllocation: number; // monthly kg once threshold reached
+}
+
+export interface InnovationContribution extends ContributionPath {
+  path: 'innovation';
+  ipNftId: string; // ERC-721 IP NFT identifier
+  royaltyRate: number; // ERC-2981 royalty fraction (parametric, L003)
+  accepted: boolean; // IP committed + accepted on-chain
+  foodAllocation: number; // monthly kg once accepted
+}
+
 /**
  * Minimum thresholds:
  * - Capital: $5000 USD equivalent
  * - Land: 500 square feet (46.5 sq meters)
  * - Labor: 6 months full-time equivalent (260 working days)
+ * - Marketing: 1000 kg of verified produce demand generated (parametric)
+ * - Innovation: 1 accepted IP NFT
  */
 export const THRESHOLDS = {
   capital: 5000,
   land: 46.5, // Square meters
   laborDays: 260, // Full-time equivalent over 6 months
   laborHours: 260 * 8, // Assuming 8-hour workday
+  marketingDemandKg: 1000, // verified demand generated to qualify
+  innovationNfts: 1, // one accepted IP NFT to qualify
 };
+
+/**
+ * Parametric commercials (L003 / hard convention §3e). Named inputs with
+ * documented ranges; never hardcode at call sites.
+ * - phi_commission,k: marketing commission fraction, range 0.02-0.10
+ * - innovation royalty: ERC-2981 default fraction, range 0.02-0.10
+ */
+export const DEFAULT_MARKETING_COMMISSION = 0.05;
+export const DEFAULT_INNOVATION_ROYALTY = 0.05;
+export const MARKETING_BASE_ALLOCATION_KG = 30; // monthly food once qualified
+export const INNOVATION_BASE_ALLOCATION_KG = 50; // monthly food once accepted
 
 export const LABOR_EQUITY_CONVERSION_TRIGGER = THRESHOLDS.laborHours;
 
@@ -57,6 +98,8 @@ export class ContributionContract {
   private capitalContributions: Map<string, CapitalContribution> = new Map();
   private landContributions: Map<string, LandContribution> = new Map();
   private laborContributions: Map<string, LaborContribution> = new Map();
+  private marketingContributions: Map<string, MarketingContribution> = new Map();
+  private innovationContributions: Map<string, InnovationContribution> = new Map();
 
   // Subscription tier definitions (monthly food allocation in kg)
   private subscriptionTiers = {
@@ -206,6 +249,99 @@ export class ContributionContract {
   }
 
   /**
+   * Register a marketing contribution. The contributor earns food access by
+   * generating verified produce demand (and content). Qualifies once
+   * cumulative verified demand reaches THRESHOLDS.marketingDemandKg.
+   * @param state - WorldState instance
+   * @param address - Contributor address
+   * @param farmId - Farm identifier
+   * @param verifiedDemandKg - Verified produce demand generated (kg)
+   * @param contentPieces - Verified marketing/content assets produced
+   * @param commissionRate - phi_commission,k (parametric, L003); defaults to DEFAULT_MARKETING_COMMISSION
+   * @returns Object with food allocation and commission rate
+   */
+  public registerMarketingContribution(
+    state: WorldState,
+    address: string,
+    farmId: string,
+    verifiedDemandKg: number,
+    contentPieces: number = 0,
+    commissionRate: number = DEFAULT_MARKETING_COMMISSION
+  ): { foodAllocation: number; commissionRate: number; qualified: boolean } {
+    if (verifiedDemandKg < 0) {
+      throw new Error('verifiedDemandKg must be non-negative');
+    }
+
+    const qualified = verifiedDemandKg >= THRESHOLDS.marketingDemandKg;
+    const foodAllocation = qualified ? MARKETING_BASE_ALLOCATION_KG : 0;
+
+    const contribution: MarketingContribution = {
+      path: 'marketing',
+      address,
+      farmId,
+      startedAt: Math.floor(Date.now() / 1000),
+      verifiedDemandKg,
+      contentPieces,
+      commissionRate,
+      foodAllocation,
+    };
+
+    const key = `marketing-${farmId}-${address}`;
+    this.marketingContributions.set(key, contribution);
+
+    state.updateBalance(address, 'MARKETING_CONTRIBUTION', verifiedDemandKg);
+
+    return { foodAllocation, commissionRate, qualified };
+  }
+
+  /**
+   * Register an innovation contribution. The contributor commits a patentable
+   * improvement as an IP NFT (ERC-721 + ERC-2981 royalty). Qualifies for food
+   * access once the IP NFT is accepted.
+   * @param state - WorldState instance
+   * @param address - Contributor address
+   * @param farmId - Farm identifier
+   * @param ipNftId - IP NFT identifier
+   * @param royaltyRate - ERC-2981 royalty fraction (parametric, L003); defaults to DEFAULT_INNOVATION_ROYALTY
+   * @param accepted - Whether the IP has been accepted on-chain
+   * @returns Object with food allocation and royalty rate
+   */
+  public registerInnovationContribution(
+    state: WorldState,
+    address: string,
+    farmId: string,
+    ipNftId: string,
+    royaltyRate: number = DEFAULT_INNOVATION_ROYALTY,
+    accepted: boolean = true
+  ): { foodAllocation: number; royaltyRate: number; accepted: boolean } {
+    if (!ipNftId) {
+      throw new Error('innovation contribution requires an ipNftId');
+    }
+
+    const foodAllocation = accepted ? INNOVATION_BASE_ALLOCATION_KG : 0;
+
+    const contribution: InnovationContribution = {
+      path: 'innovation',
+      address,
+      farmId,
+      startedAt: Math.floor(Date.now() / 1000),
+      ipNftId,
+      royaltyRate,
+      accepted,
+      foodAllocation,
+    };
+
+    const key = `innovation-${farmId}-${address}`;
+    this.innovationContributions.set(key, contribution);
+
+    if (accepted) {
+      state.updateBalance(address, 'INNOVATION_CONTRIBUTION', 1);
+    }
+
+    return { foodAllocation, royaltyRate, accepted };
+  }
+
+  /**
    * Process labor payment and equity accrual
    * After 6 months (1560 hours), excess wages convert to equity
    * @param state - WorldState instance
@@ -312,7 +448,53 @@ export class ContributionContract {
       }
     }
 
+    // Check marketing path - eligible once verified demand threshold reached
+    for (const [, contribution] of this.marketingContributions) {
+      if (contribution.address === address) {
+        if (contribution.verifiedDemandKg >= THRESHOLDS.marketingDemandKg) {
+          return {
+            eligible: true,
+            path: 'marketing',
+            monthlyAllocation: contribution.foodAllocation,
+          };
+        }
+      }
+    }
+
+    // Check innovation path - eligible once an IP NFT is accepted
+    for (const [, contribution] of this.innovationContributions) {
+      if (contribution.address === address) {
+        if (contribution.accepted) {
+          return {
+            eligible: true,
+            path: 'innovation',
+            monthlyAllocation: contribution.foodAllocation,
+          };
+        }
+      }
+    }
+
     return { eligible: false, path: '', monthlyAllocation: 0 };
+  }
+
+  /**
+   * Get marketing contribution details
+   */
+  public getMarketingContribution(
+    farmId: string,
+    address: string
+  ): MarketingContribution | undefined {
+    return this.marketingContributions.get(`marketing-${farmId}-${address}`);
+  }
+
+  /**
+   * Get innovation contribution details
+   */
+  public getInnovationContribution(
+    farmId: string,
+    address: string
+  ): InnovationContribution | undefined {
+    return this.innovationContributions.get(`innovation-${farmId}-${address}`);
   }
 
   /**
@@ -366,6 +548,8 @@ export class ContributionContract {
     capital: CapitalContribution[];
     land: LandContribution[];
     labor: LaborContribution[];
+    marketing: MarketingContribution[];
+    innovation: InnovationContribution[];
   } {
     const capital = Array.from(this.capitalContributions.values()).filter(
       (c) => c.farmId === farmId
@@ -376,7 +560,24 @@ export class ContributionContract {
     const labor = Array.from(this.laborContributions.values()).filter(
       (c) => c.farmId === farmId
     );
+    const marketing = Array.from(this.marketingContributions.values()).filter(
+      (c) => c.farmId === farmId
+    );
+    const innovation = Array.from(this.innovationContributions.values()).filter(
+      (c) => c.farmId === farmId
+    );
 
-    return { capital, land, labor };
+    return { capital, land, labor, marketing, innovation };
   }
+
+  /**
+   * The five contribution path names supported by the protocol (L045).
+   */
+  public static readonly PATHS: ContributionPathName[] = [
+    'capital',
+    'land',
+    'labor',
+    'marketing',
+    'innovation',
+  ];
 }
