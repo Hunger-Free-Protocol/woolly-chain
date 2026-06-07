@@ -392,10 +392,27 @@ const CONFIG = {
 // UTILITY FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════
 
+// Seeded PRNG (mulberry32) so the simulation — and therefore every emitted CSV —
+// is byte-exact reproducible run-to-run (CLAUDE.md §3.f). Previously gaussian()
+// used unseeded Math.random(), so noise-driven outputs (four-mechanism uplift,
+// productivity multiplier, demand model) drifted between runs. Seed is fixed;
+// override with WOOLLY_SIM_SEED for the multi-seed robustness sweep (Doc 3 P11).
+const SIM_SEED = Number(process.env.WOOLLY_SIM_SEED ?? 42);
+function makeRng(seed: number): () => number {
+  let a = seed >>> 0;
+  return function () {
+    a |= 0; a = (a + 0x6D2B79F5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+const rng = makeRng(SIM_SEED);
+
 function gaussian(mean: number, stddev: number): number {
-  // Box-Muller transform for normal distribution
-  const u1 = Math.random();
-  const u2 = Math.random();
+  // Box-Muller transform for normal distribution (seeded — see makeRng above)
+  const u1 = rng();
+  const u2 = rng();
   const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
   return mean + z * stddev;
 }

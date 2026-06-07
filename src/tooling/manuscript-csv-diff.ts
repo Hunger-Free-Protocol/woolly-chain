@@ -120,15 +120,16 @@ interface Check {
 
 const MANIFEST: Check[] = [
   // ── §4.3 Table 9 four-mechanism decomposition (±2.5pp band) ──
-  { label: '§4.3 channel substitution', csv: 'four_mechanism_summary.csv', manuscript: 1.12, tolerancePp: 2.5,
+  // Seeded sim (WOOLLY_SIM_SEED=42) → deterministic CSV; manuscript values match exactly.
+  { label: '§4.3 channel substitution', csv: 'four_mechanism_summary.csv', manuscript: 1.13, tolerancePp: 0.5,
     agg: { kind: 'rowValue', matchCol: 'mechanism', matchVal: 'channel_substitution', col: 'mean_contribution_pp' } },
-  { label: '§4.3 spoilage reduction', csv: 'four_mechanism_summary.csv', manuscript: 8.43, tolerancePp: 2.5,
+  { label: '§4.3 spoilage reduction', csv: 'four_mechanism_summary.csv', manuscript: 8.44, tolerancePp: 0.5,
     agg: { kind: 'rowValue', matchCol: 'mechanism', matchVal: 'spoilage_reduction', col: 'mean_contribution_pp' } },
-  { label: '§4.3 contract pricing', csv: 'four_mechanism_summary.csv', manuscript: 2.25, tolerancePp: 2.5,
+  { label: '§4.3 contract pricing', csv: 'four_mechanism_summary.csv', manuscript: 2.25, tolerancePp: 0.5,
     agg: { kind: 'rowValue', matchCol: 'mechanism', matchVal: 'contract_pricing', col: 'mean_contribution_pp' } },
-  { label: '§4.3 batch coordination', csv: 'four_mechanism_summary.csv', manuscript: 4.48, tolerancePp: 2.5,
+  { label: '§4.3 batch coordination', csv: 'four_mechanism_summary.csv', manuscript: 4.51, tolerancePp: 0.5,
     agg: { kind: 'rowValue', matchCol: 'mechanism', matchVal: 'batch_coordination', col: 'mean_contribution_pp' } },
-  { label: '§4.3 total uplift (eco mean 16.27)', csv: 'four_mechanism_summary.csv', manuscript: 16.27, tolerancePp: 2.5,
+  { label: '§4.3 total uplift (eco mean 16.33)', csv: 'four_mechanism_summary.csv', manuscript: 16.33, tolerancePp: 0.5,
     agg: { kind: 'rowValue', matchCol: 'mechanism', matchVal: 'total_uplift', col: 'mean_contribution_pp' } },
 
   // ── §4.1 crop-cycle efficiency: sim values cited in parentheses (±2pp, L011) ──
