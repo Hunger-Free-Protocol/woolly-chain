@@ -389,6 +389,28 @@ const CONFIG = {
 };
 
 // ═══════════════════════════════════════════════════════════════════
+// Sensitivity overrides (env-driven; drive the #59 tornado sweep).
+// No effect at defaults — each var defaults to the central CONFIG value, so a
+// normal `npm run simulate` is unchanged. Used by scripts/sensitivity.sh.
+// ═══════════════════════════════════════════════════════════════════
+{
+  const envNum = (k: string, d: number) => (process.env[k] !== undefined ? Number(process.env[k]) : d);
+  const rd: any = CONFIG.revenueDecomposition;
+  rd.channelSubstitution.woollyD2CConsumerPriceRel =
+    envNum('WOOLLY_SENS_PRICE_REL', rd.channelSubstitution.woollyD2CConsumerPriceRel);
+  rd.channelSubstitution.qcommerceCommission =
+    envNum('WOOLLY_SENS_QC_COMMISSION', rd.channelSubstitution.qcommerceCommission);
+  const spMult = envNum('WOOLLY_SENS_SPOILAGE_MULT', 1.0);   // ×woolly spoilage rate (higher → less reduction)
+  const ctMult = envNum('WOOLLY_SENS_CONTRACT_MULT', 1.0);   // ×contract-pricing α
+  const bcMult = envNum('WOOLLY_SENS_BATCH_MULT', 1.0);      // ×batch-coordination β
+  for (const c of ['Lettuce', 'Tomato', 'Herbs']) {
+    rd.spoilageReduction[c].woolly *= spMult;
+    rd.contractPricing[c] *= ctMult;
+    rd.batchCoordination[c] *= bcMult;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
 // UTILITY FUNCTIONS
 // ═══════════════════════════════════════════════════════════════════
 
