@@ -9,6 +9,7 @@
     "dev": "ts-node src/index.ts",
     "test": "ts-node src/test.ts",
     "simulate": "ts-node src/simulation-runner.ts",
+    "verify": "bash scripts/verify.sh",
     "verify:manuscript": "ts-node src/tooling/manuscript-csv-diff.ts"
   },
   "dependencies": {
