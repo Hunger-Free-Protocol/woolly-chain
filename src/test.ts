@@ -25,6 +25,12 @@ import { CropCycleToken } from './tokens/crop-cycle';
 import { CarbonToken } from './tokens/carbon';
 import { ContributionContract } from './contracts/contribution';
 import { csvToTableAligner } from './tooling/manuscript-csv-diff';
+import {
+  getRateLimitConfig,
+  RATE_LIMIT_WINDOW_MS_DEFAULT,
+  RATE_LIMIT_MAX_DEFAULT,
+} from './api/server';
+import rateLimit from 'express-rate-limit';
 import { v4 as uuidv4 } from 'uuid';
 
 // ─── Helpers ───────────────────────────────────────────────────────
@@ -1023,6 +1029,34 @@ async function main() {
     let threwTable = false;
     try { csvToTableAligner('nonexistent_table', 'Crop'); } catch { threwTable = true; }
     assert(threwTable, 'Aligner is fail-loud on an unknown table');
+  }
+  console.log('');
+
+  // ── 15. Deploy gate: rate-limit config is parametric (§3.h / §3.e) ──
+  console.log('▸ 15. Rate-limit deploy gate (§3.h)');
+  {
+    // Defaults resolve to the named constants (no hardcoded magic at call site)
+    delete process.env.RATE_LIMIT_WINDOW_MS;
+    delete process.env.RATE_LIMIT_MAX;
+    const def = getRateLimitConfig();
+    assert(def.windowMs === RATE_LIMIT_WINDOW_MS_DEFAULT,
+      `Default window ${def.windowMs}ms = named constant`);
+    assert(def.max === RATE_LIMIT_MAX_DEFAULT,
+      `Default max ${def.max} = named constant`);
+
+    // Env knobs override the defaults (parametric, §3.e)
+    process.env.RATE_LIMIT_WINDOW_MS = '60000';
+    process.env.RATE_LIMIT_MAX = '5';
+    const tuned = getRateLimitConfig();
+    assert(tuned.windowMs === 60000 && tuned.max === 5,
+      `Env override honored → ${tuned.windowMs}ms / ${tuned.max} req`);
+    delete process.env.RATE_LIMIT_WINDOW_MS;
+    delete process.env.RATE_LIMIT_MAX;
+
+    // The config is accepted by express-rate-limit and yields a mountable middleware
+    const limiter = rateLimit(getRateLimitConfig());
+    assert(typeof limiter === 'function' && limiter.length === 3,
+      'rateLimit(getRateLimitConfig()) returns a 3-arg Express middleware');
   }
   console.log('');
 

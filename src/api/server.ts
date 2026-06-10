@@ -5,9 +5,34 @@
 
 import express, { Express, Request, Response, NextFunction } from 'express';
 import cors from 'cors';
+import rateLimit from 'express-rate-limit';
 import { WoollyChain } from '../core';
 import { BlockProducer } from '../node/producer';
 import { createRoutes } from './routes';
+
+/**
+ * Rate-limit defaults — named constants per CLAUDE.md §3.e (no hardcoded
+ * magic numbers at the call site). Both are env-tunable at boot:
+ *   RATE_LIMIT_WINDOW_MS — sliding window length in ms
+ *   RATE_LIMIT_MAX       — max requests per window, per client IP
+ */
+export const RATE_LIMIT_WINDOW_MS_DEFAULT = 15 * 60 * 1000; // 15 minutes
+export const RATE_LIMIT_MAX_DEFAULT = 100;                   // requests / window / IP
+
+/**
+ * Resolve the rate-limit config from env, falling back to the named defaults.
+ * CLAUDE.md §3.h names express-rate-limit on /api/* as a deploy gate; §3.e
+ * requires the knobs be parametric, not hardcoded.
+ */
+export function getRateLimitConfig(): { windowMs: number; max: number } {
+  const windowMs = process.env.RATE_LIMIT_WINDOW_MS
+    ? parseInt(process.env.RATE_LIMIT_WINDOW_MS, 10)
+    : RATE_LIMIT_WINDOW_MS_DEFAULT;
+  const max = process.env.RATE_LIMIT_MAX
+    ? parseInt(process.env.RATE_LIMIT_MAX, 10)
+    : RATE_LIMIT_MAX_DEFAULT;
+  return { windowMs, max };
+}
 
 /**
  * Create and configure Express application
@@ -75,6 +100,21 @@ export function createServer(chain: WoollyChain, producer: BlockProducer): Expre
       next();
     });
   }
+
+  /**
+   * Rate limiting on /api/* — CLAUDE.md §3.h deploy gate. Mounted before the
+   * body parsers so flood traffic is rejected before payloads are parsed.
+   * Window/max are env-tunable (RATE_LIMIT_WINDOW_MS / RATE_LIMIT_MAX) with
+   * named-constant defaults (§3.e).
+   */
+  const { windowMs, max } = getRateLimitConfig();
+  app.use('/api', rateLimit({
+    windowMs,
+    max,
+    standardHeaders: true,  // RateLimit-* headers
+    legacyHeaders: false,   // disable X-RateLimit-* headers
+    message: { error: 'Too many requests — rate limit exceeded. Retry after the window resets.' },
+  }));
 
   /**
    * JSON body parser
