@@ -90,6 +90,28 @@ for f in "$ROOT_DIR"/*.zip; do
     archive_fail=1
   fi
 done
+# Extensionless archives too — the 2026-06-10 sweep found the farm-node key in
+# a zip named `ziHLHI3U` that an extension-keyed scan misses. Detect by content.
+if command -v file >/dev/null; then
+  for f in "$ROOT_DIR"/*; do
+    [ -f "$f" ] || continue
+    case "$f" in *.tar.gz|*.tgz|*.zip) continue;; esac
+    case "$(file -b "$f" 2>/dev/null)" in
+      Zip\ archive*)
+        archive_seen=1
+        if command -v unzip >/dev/null && unzip -l "$f" 2>/dev/null | grep -qE 'identity\.json|gcp-key|\.env$|\.pem$'; then
+          fail "extensionless zip $(basename "$f") packages secret-named files (H1)"
+          archive_fail=1
+        fi ;;
+      gzip\ compressed*)
+        archive_seen=1
+        if tar tzf "$f" 2>/dev/null | grep -qE 'identity\.json|gcp-key|\.env$|\.pem$'; then
+          fail "extensionless tarball $(basename "$f") packages secret-named files (H1)"
+          archive_fail=1
+        fi ;;
+    esac
+  done
+fi
 [ "$archive_fail" -eq 0 ] && { [ "$archive_seen" -eq 1 ] && pass 'root archives carry no secret-named entries' || pass 'no archives at project root (nothing to scan)'; }
 
 # ── 2. Manuscript + sim-source grep gates (§3.a / §3.d / d.1 / d.4 / d.5) ──
