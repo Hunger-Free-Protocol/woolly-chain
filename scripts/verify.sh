@@ -170,6 +170,14 @@ else
   tail -15 /tmp/verify_manuscript_out.txt | sed 's/^/      /'
 fi
 
+# ── 5. Doc freshness (T8/G4 — warnings only, never affects exit code) ──────
+section '5. Doc freshness (L003 — advisory, non-failing)'
+if [ -f "$ROOT_DIR/scripts/doc_freshness.sh" ]; then
+  bash "$ROOT_DIR/scripts/doc_freshness.sh" | sed 's/^/  /'
+else
+  skip 'scripts/doc_freshness.sh not present (standalone clone) — freshness advisory skipped'
+fi
+
 # ── Summary ────────────────────────────────────────────────────────────────
 echo
 echo '══════════════════════════════════════════════════'
