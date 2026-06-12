@@ -223,25 +223,29 @@ def fig_seed_to_fork():
 
 # ── Figure 8: Food-mining sensitivity — equity subscribers vs phi_profit (§4.8) ──
 def fig_food_mining_sensitivity():
-    # Theorem 1 (Doc 7 §6.2): N_eq = min(Q/a, phi*R/E_threshold)
-    Q, a, R, E = 62400.0, 200.0, 48000.0, 296.0          # worked-example params
-    prod_cap = Q / a                                      # production bound = 312
+    # Theorem 1 (Doc 7 §6.2, R_farm decision 2026-06-12): N_eq = min(V/E_thr(phi), N_reserve)
+    # E_thr(phi) = eps(phi)*V with eps = C_food_eff/(R*phi), so uncapped capacity = R*phi/C_food_eff
+    R, V = 42500.0, 200000.0                              # worked-example params (sim/Doc 7 canonical)
+    C_EFF = 0.70 * 1.00 * 200.0 * 0.36                    # rho_bar*Pi_bar*a*C_food = $50.40/yr (Eq. 9)
+    RESERVE_CAP = 250.0                                   # market-bounded pool closure (Theorem 4)
     phi = np.linspace(0.70, 0.90, 41)
-    econ = phi * R / E                                    # economic bound
-    neq = np.minimum(econ, prod_cap)
+    uncapped = phi * R / C_EFF                            # V/E_thr(phi): 590 -> 759
+    neq = np.minimum(uncapped, RESERVE_CAP)
     fig, ax = plt.subplots(figsize=(7.2, 4.2))
-    ax.plot(phi, econ, color=BLUE, lw=2, label=r"Economic bound  $\varphi R / E_{thr}$")
-    ax.hlines(prod_cap, 0.70, 0.90, color=GRAY, ls="--", lw=1.6, label=f"Production cap (Q/a = {prod_cap:.0f})")
+    ax.plot(phi, uncapped, color=BLUE, lw=2, label=r"Uncapped capacity  $V_{farm}/E_{thr}(\varphi)$")
     ax.plot(phi, neq, color=GREEN, lw=2.6, label=r"$N_{eq}$ (binding min)")
-    ax.scatter([0.80], [0.80*R/E], s=90, color=RED, zorder=5)
-    ax.annotate(f"worked example\n(φ=0.80, ≈{0.80*R/E:.0f} → 250 demand-interp.)",
-                (0.80, 0.80*R/E), xytext=(0.805, 175), fontsize=8.5, color=RED,
+    ax.hlines(RESERVE_CAP, 0.70, 0.90, color=GRAY, ls="--", lw=1.6, zorder=4,
+              label=f"Reserve closure (Thm 4; N = {RESERVE_CAP:.0f} at φ=0.80)")
+    ax.scatter([0.80], [0.80*R/C_EFF], s=90, color=RED, zorder=5)
+    ax.annotate(f"worked example\n(φ=0.80: uncapped ≈{0.80*R/C_EFF:.0f} → 250 reserve-capped)",
+                (0.80, 0.80*R/C_EFF), xytext=(0.812, 520), fontsize=8.5, color=RED,
                 arrowprops=dict(arrowstyle="->", color=RED))
     ax.set_xlabel(r"Profit-distribution share $\varphi_{profit}$")
     ax.set_ylabel("Equity-tier subscribers per farm")
     ax.set_title("Food-mining sensitivity: equity subscribers vs profit share (Theorem 1)")
-    ax.set_xlim(0.70, 0.90); ax.set_ylim(100, 330); ax.legend(fontsize=8.5); ax.grid(alpha=0.3)
-    fig.text(0.01, -0.02, "Doc 7 §6.2 params (Q=62,400 kg/yr, a=200 kg, R=$48,000, E_thr=$296).",
+    ax.set_xlim(0.70, 0.90); ax.set_ylim(150, 820); ax.legend(fontsize=8.5, loc="upper left"); ax.grid(alpha=0.3)
+    fig.text(0.01, -0.02, "Doc 7 §6.2 params (R=\\$42,500, V_farm=\\$200,000, a=200 kg, C_food=\\$0.36/kg, mean redemption 0.70; E_thr(0.80)=\\$296). "
+             "Reserve closure computed at the φ=0.80 operating point.",
              fontsize=7.5, color="#555")
     fig.savefig(os.path.join(OUT, "fig_food_mining_sensitivity.png")); plt.close(fig)
     print("wrote fig_food_mining_sensitivity.png")
