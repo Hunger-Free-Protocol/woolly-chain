@@ -10,7 +10,7 @@ This repository accompanies the manuscript submitted to *Computers and Electroni
 
 ## What this simulation produces
 
-Running `npm run simulate` regenerates the manuscript's headline tables from first principles. Outputs are committed to `simulation-output/` and include:
+Running `npm run simulate` regenerates the manuscript's headline tables from first principles. Outputs are regenerated into `simulation-output/` (gitignored; deterministic at WOOLLY_SIM_SEED=42) and include:
 
 - Per-cycle telemetry across 10 simulated farms × 6 crop cycles × 3 crop types (60 total cycles)
 - Four-mechanism revenue decomposition (channel substitution, spoilage reduction, contract pricing optimization, batch coordination)
