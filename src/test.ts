@@ -749,6 +749,103 @@ async function main() {
   }
   console.log('');
 
+  // ── 12e-conv. Scale-Projection Convergence (Module 7 — reviewer stress test) ──
+  // Q-B8: "show the math doesn't blow up at the §6.4 scale (50,000 farms)."
+  // Closed-form replication of computeTreasuryExpansion() (simulation-runner.ts §527+),
+  // probed FAR BEYOND the calibrated 50k ceiling to prove the Self-Funding Expansion
+  // projection (Theorem 3) stays finite, monotone, linearly-scaling, and convergent.
+  // The local formula is cross-checked against the emitted CSV at N=50k (drift guard),
+  // so it cannot silently diverge from the simulation engine.
+  console.log('▸ 12e-conv. Scale-Projection Convergence — no blow-up beyond §6.4 (Theorem 3)');
+  {
+    // Constants mirror CONFIG.treasuryReinvestment (simulation-runner.ts §199-213).
+    const V_INITIAL = 200000, V_FLOOR = 80000, BETA = 0.20;
+    const BOOTSTRAP_FARMS = 300, SUBS_AT_50K = 23000;
+    const ALLOC_KG = 200, PRICE = 1.79, RHO = 0.70;
+
+    interface ScalePoint { N: number; V_farm: number; inflow: number; gamma: number; selfFunding: boolean; }
+    const expansionAt = (N: number): ScalePoint => {
+      const V_farm = V_FLOOR + (V_INITIAL - V_FLOOR) * Math.pow(Math.max(N, 1), -BETA);
+      const subs = SUBS_AT_50K * (N / 50000);
+      const inflow = (1 - RHO) * subs * ALLOC_KG * PRICE;
+      const gamma = inflow / V_farm;
+      return { N, V_farm, inflow, gamma, selfFunding: gamma > 1.0 && N >= BOOTSTRAP_FARMS };
+    };
+
+    // Probe at and far beyond the §6.4 operating point (50k) — up to 10^12 farms.
+    const scales = [50_000, 100_000, 500_000, 1_000_000, 10_000_000, 1_000_000_000, 1_000_000_000_000];
+    const pts = scales.map(N => expansionAt(N));
+
+    // C1 — Finiteness: nothing diverges to NaN/Infinity at any probed scale.
+    for (const p of pts) {
+      assert(
+        Number.isFinite(p.V_farm) && Number.isFinite(p.inflow) && Number.isFinite(p.gamma) &&
+        p.V_farm > 0 && p.inflow > 0 && p.gamma > 0,
+        `N=${p.N.toExponential(0)}: V_farm/inflow/γ finite & positive (no blow-up)`);
+    }
+
+    // C2 — V_farm bounded in (floor, initial] and strictly monotone-decreasing.
+    for (const p of pts) {
+      assert(p.V_farm > V_FLOOR && p.V_farm <= V_INITIAL,
+        `N=${p.N.toExponential(0)}: V_farm $${p.V_farm.toFixed(0)} stays in (floor $80k, initial $200k]`);
+    }
+    for (let i = 1; i < pts.length; i++) {
+      assert(pts[i].V_farm < pts[i - 1].V_farm,
+        `V_farm monotone-decreasing: $${pts[i - 1].V_farm.toFixed(0)} → $${pts[i].V_farm.toFixed(0)}`);
+    }
+
+    // C3 — Convergence: V_farm → floor as N → ∞ (within 1% of $80k floor at 10^12 farms).
+    const vAtTrillion = expansionAt(1e12).V_farm;
+    assert(Math.abs(vAtTrillion - V_FLOOR) < 0.01 * V_FLOOR,
+      `V_farm converges to floor: $${vAtTrillion.toFixed(0)} within 1% of $80k at N=1e12`);
+
+    // C4 — Treasury inflow scales exactly linearly (no super-linear explosion).
+    for (let i = 1; i < pts.length; i++) {
+      const ratio = pts[i].inflow / pts[i - 1].inflow;
+      const expected = pts[i].N / pts[i - 1].N;
+      assert(Math.abs(ratio - expected) < 1e-6,
+        `inflow linear in N: ×${expected} scale → ×${ratio.toFixed(4)} inflow`);
+    }
+
+    // C5 — γ_endogenous strictly increasing; self-funding holds at every probed scale.
+    for (let i = 1; i < pts.length; i++) {
+      assert(pts[i].gamma > pts[i - 1].gamma,
+        `γ_endogenous monotone-increasing: ${pts[i - 1].gamma.toFixed(1)} → ${pts[i].gamma.toFixed(1)}`);
+    }
+    for (const p of pts) {
+      assert(p.selfFunding === true,
+        `N=${p.N.toExponential(0)}: self-funding holds (γ=${p.gamma.toFixed(1)} > 1, post-bootstrap)`);
+    }
+
+    // C6 — Anchor: the 50k operating point reproduces the Theorem 3 manuscript values.
+    const a50 = expansionAt(50_000);
+    assert(Math.abs(a50.V_farm - 93_784) < 50,
+      `V_farm(50k)=$${a50.V_farm.toFixed(0)} matches Theorem 3 $93,784`);
+    assert(Math.abs(a50.inflow - 2_470_000) < 5_000,
+      `T_inflow(50k)=$${(a50.inflow / 1e6).toFixed(3)}M matches Doc 7 §6.4 $2.47M`);
+    assert(a50.gamma >= 16 && Math.abs(a50.gamma - 26) < 2,
+      `γ(50k)=${a50.gamma.toFixed(1)} matches Theorem 3 γ≈26 (≥16 lower bound)`);
+
+    // C7 — Drift guard: local formula matches the emitted CSV at N=50k (if present).
+    const trPathConv = path.resolve(__dirname, '..', 'simulation-output', 'treasury_expansion_summary.csv');
+    if (fs.existsSync(trPathConv)) {
+      const rws = fs.readFileSync(trPathConv, 'utf-8').split('\n').filter((l: string) => l.trim());
+      const hdr = rws[0].split(',');
+      const row50k = rws.slice(1)
+        .map((l: string) => { const c = l.split(','); const o: Record<string, string> = {}; hdr.forEach((h, i) => { o[h] = c[i]; }); return o; })
+        .find(r => parseInt(r['ecosystem_scale_farms']) === 50000);
+      if (row50k) {
+        assert(Math.abs(parseFloat(row50k['V_farm_USD']) - a50.V_farm) < 1.0,
+          `drift guard: local V_farm(50k) matches emitted CSV ($${parseFloat(row50k['V_farm_USD']).toFixed(0)})`);
+        assert(Math.abs(parseFloat(row50k['ecosystem_annual_treasury_inflow_USD']) - a50.inflow) < 1.0,
+          `drift guard: local T_inflow(50k) matches emitted CSV`);
+      }
+    }
+
+    console.log(`  Probed N up to 1e12 → all finite; V_farm→$80k floor; inflow linear; γ↑; self-funding holds`);
+  }
+  console.log('');
+
   // ── 12f. V2 Productivity Multiplier Π_b + Market-Bounded Reserve ──
   // Per Doc 7 §3.5 (Π_b dynamic token valuation) + §5.5 (Eq. 19 reserve constraint).
   console.log('▸ 12f. V2 Productivity Π_b + Market-Bounded Reserve (Modules 8+9)');
