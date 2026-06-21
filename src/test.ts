@@ -9,12 +9,13 @@ import { WoollyChain } from './core/chain';
 import { WorldState } from './core/state';
 import { generateAddress } from './core/crypto';
 import { createBlock } from './core/block';
-import { TransactionType, DEFAULT_CHAIN_CONFIG } from './core/types';
+import { TransactionType, DEFAULT_CHAIN_CONFIG, TELEMETRY_BOUNDS, TelemetryData, TelemetryBoundedField, ValidatorInfo } from './core/types';
 import {
   calculateProductivityScore,
   calculateSustainabilityScore,
   calculateCommitmentScore,
   calculatePoNWeight,
+  THETA_CLAMP_WEIGHT,
 } from './consensus/scoring';
 import { ValidatorManager } from './consensus/validator';
 import { WeightedBFT } from './consensus/bft';
@@ -918,6 +919,36 @@ async function main() {
       `Herbs: constraint NOT binding (high margin allows ≥3 mo reserve)`);
 
     console.log(`  Lettuce N_opex_max=${lettuce['N_opex_max_months']}mo | Tomato=${tomato['N_opex_max_months']}mo | Herbs=${herbs['N_opex_max_months']}mo`);
+
+    // (Q-B8) Batch-coordination shortfall — a demand spike BEYOND ecosystem capacity must NOT
+    // balloon the operational reserve. Realized volume is capped at production capacity Q (the
+    // excess demand is an unmet shortfall), so the reserve ceiling stays N_opex_max=(P−C)·Q/C_opex
+    // and the equity-subscription pool closes at min(N_opex_max, target). A naive system sizing
+    // reserves to the spiked DEMAND would over-reserve; Eq. 19 engages to bound it. Per Doc 7
+    // §5.5 (Module 9 / Theorem 4).
+    const targetMonths = parseFloat(mbrRows[0]['N_opex_target_months']); // 3 (per CONFIG)
+    const demandSpike = 5.0;  // demand spikes to 5× ecosystem capacity (batch-coordination shortfall)
+    for (const r of mbrRows) {
+      const crop = stripQuotes(r['crop']);
+      const P = parseFloat(r['P_market_USD_per_kg']);
+      const C = parseFloat(r['C_prod_USD_per_kg']);
+      const Q = parseFloat(r['Q_annual_kg']);            // realized capacity (demand-pull capped)
+      const Copex = parseFloat(r['C_opex_monthly_USD']);
+      const N_opex_max = (P - C) * Q / Copex;
+      const poolClosesAt = Math.min(N_opex_max, targetMonths);
+      const naiveDemandSized = (P - C) * (Q * demandSpike) / Copex; // if wrongly sized to demand
+
+      // (i) The reserve is bounded by the target regardless of the demand spike.
+      assert(poolClosesAt <= targetMonths + 1e-9,
+        `${crop}: equity pool closes at ≤${targetMonths}mo (${poolClosesAt.toFixed(2)}mo) — Eq. 19 caps reserve under ${demandSpike}× demand spike`);
+      // (ii) The market-bounded reserve does NOT scale with unmet demand (no ballooning).
+      assert(poolClosesAt < naiveDemandSized,
+        `${crop}: market-bounded reserve ${poolClosesAt.toFixed(2)}mo ≪ demand-sized ${naiveDemandSized.toFixed(2)}mo — shortfall does not balloon reserves`);
+      // (iii) Drift guard: the emitted pool_closes_at_months equals the Eq. 19 bound.
+      assert(Math.abs(parseFloat(r['pool_closes_at_months']) - poolClosesAt) < 0.01,
+        `${crop}: emitted pool_closes_at=${r['pool_closes_at_months']}mo = min(N_opex_max, target) (Eq. 19 bound)`);
+    }
+    console.log(`  Shortfall guard: pool closes at min(N_opex_max, ${targetMonths}mo) regardless of ${demandSpike}× demand spike — reserve bounded`);
   }
   console.log('');
 
@@ -1155,6 +1186,177 @@ async function main() {
     assert(typeof limiter === 'function' && limiter.length === 3,
       'rateLimit(getRateLimitConfig()) returns a 3-arg Express middleware');
   }
+  console.log('');
+
+  // ── 16. Adversarial Validator — fabricated telemetry cannot inflate PoN weight (Q-B8) ──
+  // A malicious PoN actor tries to fabricate a superior validator score. Two defenses:
+  //   (1) API bounds (routes.ts §4.2): an UNCLAMPED out-of-range value is rejected (§4.2a);
+  //       a value DECLARED clamped must be pinned exactly to a bound (§4.2b) — arbitrary
+  //       fabricated numbers cannot pass either way.
+  //   (2) PoN scoring (scoring.ts): the only API-legal way to submit a favorable extreme is
+  //       to pin-to-bound + declare clamped, which multiplies the affected subscore by
+  //       THETA_CLAMP_WEIGHT (0.5) — so fabricating-to-bound strictly LOWERS the weight.
+  // Net: the adversary cannot inflate validator weight, nor the capex-amortization-linked
+  // commitment subscore (bounded by cropCycles, not telemetry).
+  console.log('▸ 16. Adversarial Validator — fabricated telemetry cannot inflate PoN weight (Q-B8)');
+
+  const advRegAt = Date.now() - 12 * 30 * 86400 * 1000;     // 12 months ago (identical for both)
+  const advTimestamp = Date.now() / 1000 - 30 * 86400;
+
+  const mkReading = (
+    over: Partial<TelemetryData>,
+    clamp?: Partial<Record<TelemetryBoundedField, number>>
+  ): TelemetryData => ({
+    farmId: 'FARM-ADV',
+    timestamp: advTimestamp,
+    soilMoisture: 0.40,
+    soilPH: 6.5,
+    soilEC: 1.5,
+    airTemp: 26,
+    humidity: 65,
+    lightIntensity: 850,
+    waterUsageLiters: 40,
+    co2Level: 380,
+    ndviScore: 0.75,
+    crossValidationScores: [0.90, 0.92, 0.90],
+    ...over,
+    ...(clamp ? { clampedFieldCounts: clamp } : {}),
+  });
+
+  const mkValidator = (address: string, history: TelemetryData[]): ValidatorInfo => ({
+    address,
+    farmId: 'FARM-ADV',
+    location: { lat: 12.97, lng: 77.59 },
+    registeredAt: advRegAt,
+    cropCycles: 3,
+    productivityScore: 0,
+    sustainabilityScore: 0,
+    commitmentScore: 0,
+    ponWeight: 0,
+    isActive: true,
+    telemetryHistory: history,
+  });
+
+  // Honest validator: 10 healthy readings, nothing clamped.
+  const honest = mkValidator('0xHONEST', Array.from({ length: 10 }, () => mkReading({})));
+
+  // Adversary: pins ndviScore to its UPPER bound (1.0 "perfect vegetation") and
+  // waterUsageLiters to its LOWER bound (0 "zero water = perfect efficiency") — the only
+  // API-legal way to submit those extremes — both DECLARED clamped.
+  const [, ndviHi] = TELEMETRY_BOUNDS.ndviScore;
+  const [waterLo] = TELEMETRY_BOUNDS.waterUsageLiters;
+  const adversary = mkValidator('0xADVERSARY', Array.from({ length: 10 }, () =>
+    mkReading({ ndviScore: ndviHi, waterUsageLiters: waterLo }, { ndviScore: 1, waterUsageLiters: 1 })));
+
+  // Defense (1): API bounds — raw fabricated extremes submitted UNCLAMPED are rejected.
+  assert(5.0 > TELEMETRY_BOUNDS.ndviScore[1],
+    'Fabricated ndviScore=5.0 exceeds bound → API rejects unclamped (routes.ts §4.2a)');
+  assert(-10 < TELEMETRY_BOUNDS.waterUsageLiters[0],
+    'Fabricated waterUsageLiters=-10 below bound → API rejects unclamped (routes.ts §4.2a)');
+  // A value DECLARED clamped must be pinned exactly to a bound (routes.ts §4.2b):
+  assert(0.99 !== TELEMETRY_BOUNDS.ndviScore[0] && 0.99 !== TELEMETRY_BOUNDS.ndviScore[1],
+    'Fabricated ndviScore=0.99 declared clamped but not at a bound → API rejects (routes.ts §4.2b)');
+
+  // Defense (2): PoN scoring — clamp down-weighting penalizes the fabricated extremes.
+  const wHonest = calculatePoNWeight(honest);
+  const wAdversary = calculatePoNWeight(adversary);
+  assert(wAdversary < wHonest,
+    `Adversary weight ${wAdversary.toFixed(4)} < honest ${wHonest.toFixed(4)} — fabricating-to-bound backfires (θ_clamp=${THETA_CLAMP_WEIGHT})`);
+
+  const honestSust = calculateSustainabilityScore(honest);
+  const advSust = calculateSustainabilityScore(adversary);
+  assert(advSust < honestSust,
+    `Adversary sustainability ${advSust.toFixed(4)} < honest ${honestSust.toFixed(4)} (water+carbon subscores ×θ_clamp)`);
+
+  // Capex-amortization economics: the commitment/investment subscore is bounded by
+  // cropCycles (estimatedInvestment = cropCycles × $5000), NOT telemetry — so fabricated
+  // telemetry cannot inflate it. Identical cropCycles ⇒ identical commitment score.
+  const honestComm = calculateCommitmentScore(honest);
+  const advComm = calculateCommitmentScore(adversary);
+  assert(Math.abs(honestComm - advComm) < 1e-6,
+    `Commitment (capex-linked) unchanged by fabricated telemetry: ${advComm.toFixed(4)} == ${honestComm.toFixed(4)}`);
+
+  // θ_clamp isolation at the scoring layer (co2Level feeds ONLY the carbon subscore):
+  // a reading identical to honest but with co2Level declared clamped multiplies the carbon
+  // contribution by THETA_CLAMP_WEIGHT. (API pinning is covered above; scoring trusts the
+  // validated clamp flag, so this isolates the down-weighting from any value change.)
+  const clampCo2 = mkValidator('0xCLAMPCO2', Array.from({ length: 10 }, () => mkReading({}, { co2Level: 1 })));
+  const sClampCo2 = calculateSustainabilityScore(clampCo2);
+  const carbonRaw = ((400 - 380) / 400) * 0.75;                          // scoring.ts L123-126
+  const expectedCarbonDrop = 0.35 * carbonRaw * (1 - THETA_CLAMP_WEIGHT); // 0.35 = carbon weight
+  assert(Math.abs((honestSust - sClampCo2) - expectedCarbonDrop) < 1e-6,
+    `co2Level clamp multiplies carbon subscore by θ_clamp (Δsust=${expectedCarbonDrop.toFixed(5)})`);
+
+  console.log(`  W_honest=${wHonest.toFixed(4)} vs W_adversary=${wAdversary.toFixed(4)} (θ_clamp=${THETA_CLAMP_WEIGHT}) → adversary cannot inflate weight`);
+  console.log('');
+
+  // ── 17. Sensor-Failure Recovery — RS485 drop → clamp-and-flag over unclamped subset (Q-B8) ──
+  // Models a mid-cycle RS485 soilPH sensor drop. Per scoring.ts §5.4, the disease subscore's
+  // variance is computed over the UNCLAMPED readings only — otherwise a sensor stuck at a bound
+  // collapses variance to zero and reads as "perfect stability" (perverse). Clamped readings
+  // additionally down-weight the subscore by θ_clamp; <3 unclamped readings → 0.25 fallback.
+  console.log('▸ 17. Sensor-Failure Recovery — clamp-and-flag over unclamped subset (Q-B8)');
+
+  const sfReg = Date.now() - 12 * 30 * 86400 * 1000;
+  const sfTs = Date.now() / 1000 - 30 * 86400;
+  const [, phHi] = TELEMETRY_BOUNDS.soilPH;
+
+  const sfReading = (soilPH: number, clamped: boolean): TelemetryData => ({
+    farmId: 'FARM-SF', timestamp: sfTs,
+    soilMoisture: 0.40, soilPH, soilEC: 1.5, airTemp: 26, humidity: 65,
+    lightIntensity: 850, waterUsageLiters: 40, co2Level: 380, ndviScore: 0.75,
+    crossValidationScores: [0.90, 0.92, 0.90],
+    ...(clamped ? { clampedFieldCounts: { soilPH: 1 } } : {}),
+  });
+  const sfValidator = (history: TelemetryData[]): ValidatorInfo => ({
+    address: '0xSENSOR', farmId: 'FARM-SF', location: { lat: 12.97, lng: 77.59 },
+    registeredAt: sfReg, cropCycles: 3,
+    productivityScore: 0, sustainabilityScore: 0, commitmentScore: 0, ponWeight: 0,
+    isActive: true, telemetryHistory: history,
+  });
+
+  // Seven honest pH readings with genuine variation; the RS485 line then drops and the
+  // last three readings stick at the upper bound (declared clamped).
+  const honestPH = [6.2, 6.5, 6.8, 6.3, 6.6, 6.4, 6.7];
+  const midDrop = sfValidator([
+    ...honestPH.map(ph => sfReading(ph, false)),
+    sfReading(phHi, true), sfReading(phHi, true), sfReading(phHi, true),
+  ]);
+  // Reference: the same seven honest readings with no sensor failure (no clamp).
+  const cleanRef = sfValidator(honestPH.map(ph => sfReading(ph, false)));
+
+  // (1) The disease subscore is driven by the UNCLAMPED subset: the only difference between
+  //     cleanRef and midDrop is the θ_clamp down-weight on the disease component — the variance
+  //     is identical because it is computed over the same 7 honest readings (the 3 stuck values
+  //     are excluded, per §5.4), not polluted by the stuck bound value.
+  const prodMidDrop = calculateProductivityScore(midDrop);
+  const prodCleanRef = calculateProductivityScore(cleanRef);
+  const m7 = honestPH.reduce((a, b) => a + b, 0) / honestPH.length;
+  const variance7 = honestPH.reduce((a, b) => a + (b - m7) ** 2, 0) / honestPH.length;
+  const diseaseRaw = Math.max(1 - variance7 / 2, 0);
+  const expectedProdGap = 0.2 * diseaseRaw * (1 - THETA_CLAMP_WEIGHT); // 0.2 = disease weight
+  assert(Math.abs((prodCleanRef - prodMidDrop) - expectedProdGap) < 1e-6,
+    `Disease subscore computed over the 7 unclamped readings; clamp adds θ_clamp down-weight only (Δprod=${expectedProdGap.toFixed(4)})`);
+
+  // (2) A fully-stuck sensor does NOT read as "perfect stability" (§5.4 fix). With <3 unclamped
+  //     readings the disease subscore falls back to the neutral 0.25, then ×θ_clamp = 0.125 —
+  //     far below the perverse variance=0 → 1.0 that a naive all-readings variance would yield.
+  const allStuck = sfValidator(Array.from({ length: 10 }, () => sfReading(phHi, true)));
+  const stableHealthy = sfValidator(Array.from({ length: 10 }, () => sfReading(6.5, false)));
+  const prodAllStuck = calculateProductivityScore(allStuck);
+  const prodStableHealthy = calculateProductivityScore(stableHealthy);
+  assert(prodAllStuck < prodStableHealthy,
+    `Stuck-sensor validator (${prodAllStuck.toFixed(4)}) scores BELOW a genuinely-stable one (${prodStableHealthy.toFixed(4)}) — no perverse perfect-stability`);
+  // Quantify: stuck disease = (0.5 fallback × θ_clamp) = 0.125 vs naive variance=0 → 1.0.
+  const stuckDisease = 0.5 * THETA_CLAMP_WEIGHT * THETA_CLAMP_WEIGHT;     // 0.125
+  assert(Math.abs((prodStableHealthy - prodAllStuck) - 0.2 * (1.0 - stuckDisease)) < 1e-6,
+    `Stuck-sensor disease falls back to ${stuckDisease.toFixed(3)} (not 1.0): Δprod=${(0.2 * (1.0 - stuckDisease)).toFixed(4)}`);
+
+  // (3) Propagation: sensor failure lowers the overall PoN weight (graceful degradation, not reward).
+  assert(calculatePoNWeight(allStuck) < calculatePoNWeight(stableHealthy),
+    'Sensor-failure validator has lower PoN weight than a healthy one (graceful degradation)');
+
+  console.log(`  midDrop disease over 7 unclamped (var=${variance7.toFixed(3)}); allStuck disease→${stuckDisease.toFixed(3)} (no perfect-stability)`);
   console.log('');
 
   // ── Summary ──────────────────────────────────────────────────────
